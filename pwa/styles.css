@@ -1,0 +1,272 @@
+/* ===================== CSS Variables ===================== */
+:root {
+    --bg-primary: #1a1a2e;
+    --bg-secondary: #16213e;
+    --bg-card: #0f3460;
+    --text-primary: #e6e6e6;
+    --text-secondary: #a0a0b0;
+    --accent: #e94560;
+    --accent-hover: #ff6b81;
+    --border: #2a2a4a;
+    --player-bg: #0d1b2a;
+    --radius: 8px;
+}
+
+/* ===================== Reset & Base ===================== */
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ===================== Views ===================== */
+.view {
+    display: none;
+    padding: 1rem;
+    padding-bottom: 10rem; /* space for player bar */
+}
+
+.view.active {
+    display: block;
+}
+
+/* ===================== Header ===================== */
+header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+header button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: var(--radius);
+    padding: 0.5rem 1rem;
+    font-size: 1.25rem;
+    cursor: pointer;
+}
+
+/* ===================== Novel Cards ===================== */
+.novel-card {
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.novel-card:hover {
+    background: var(--bg-secondary);
+}
+
+.novel-card .novel-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+.novel-card .novel-status {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+/* ===================== Chapter List ===================== */
+.chapter-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+}
+
+.chapter-item:hover {
+    background: var(--bg-secondary);
+}
+
+.chapter-item .chapter-number {
+    color: var(--text-secondary);
+    min-width: 3rem;
+}
+
+.chapter-item .chapter-title {
+    flex: 1;
+}
+
+.chapter-item .chapter-status {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+/* ===================== Player Bar ===================== */
+.player-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--player-bg);
+    padding: 0.75rem 1rem;
+    border-top: 1px solid var(--border);
+    z-index: 100;
+}
+
+.player-bar.hidden {
+    display: none;
+}
+
+.player-info {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+}
+
+.player-info #player-novel-title {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.player-progress input[type="range"] {
+    width: 100%;
+    margin-bottom: 0.25rem;
+}
+
+.player-times {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.player-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 0.5rem 0;
+}
+
+.player-controls button {
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    font-size: 1.25rem;
+    cursor: pointer;
+    padding: 0.5rem;
+}
+
+.player-controls #btn-play-pause {
+    font-size: 1.75rem;
+    background: var(--accent);
+    border-radius: 50%;
+    width: 3rem;
+    height: 3rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.player-speed {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.player-speed input[type="range"] {
+    width: 8rem;
+}
+
+/* ===================== Modal ===================== */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+}
+
+.modal.hidden {
+    display: none;
+}
+
+.modal-content {
+    background: var(--bg-secondary);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    width: 90%;
+    max-width: 400px;
+}
+
+.modal-content h2 {
+    margin-bottom: 1rem;
+}
+
+.modal-content label {
+    display: block;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.25rem;
+    margin-top: 0.75rem;
+}
+
+.modal-content input[type="url"],
+.modal-content input[type="text"] {
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 1rem;
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 1.25rem;
+}
+
+.modal-actions button {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+
+.modal-actions button[type="submit"] {
+    background: var(--accent);
+    color: white;
+}
+
+.modal-actions button[type="button"] {
+    background: var(--border);
+    color: var(--text-primary);
+}

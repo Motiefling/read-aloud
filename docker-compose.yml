@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  # The FastAPI server and Celery worker run on the host (not in Docker)
+  # because they need direct GPU access for NLLB and TTS inference.
+  # Only Redis is containerized for convenience.
+
+volumes:
+  redis_data:

@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+celery[redis]
+httpx
+beautifulsoup4
+lxml
+ctranslate2
+sentencepiece
+transformers
+ffmpeg-python
+aiosqlite
+sqlalchemy
+pydantic
+websockets
+pyyaml
