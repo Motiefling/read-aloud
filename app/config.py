@@ -18,23 +18,37 @@ def load_config(config_path: Path | None = None) -> dict:
 
 # --------------- Scraper Settings ---------------
 
+class SiteProfile(BaseModel):
+    """CSS selectors and URL patterns for a specific light novel site."""
+    content_selector: str | None = None
+    next_page_selector: str | None = None
+    title_selector: str | None = None
+    toc_url_pattern: str | None = None
+    chapter_url_pattern: str | None = None
+    notes: str | None = None
+
+
 class ScraperSettings(BaseModel):
-    content_selector: str = "div.chapter-content"
-    next_page_selector: str = "a.next-chapter"
-    title_selector: str = "h1.chapter-title"
     request_delay_seconds: float = 1.5
     max_retries: int = 3
     user_agent: str = "Mozilla/5.0 (compatible; personal audiobook project)"
     default_encoding: str = "utf-8"
+    sites: dict[str, SiteProfile] = {}
+
+    def get_site_profile(self, domain: str) -> SiteProfile:
+        """Look up the site profile for a given domain. Raises KeyError if not found."""
+        if domain not in self.sites:
+            raise KeyError(
+                f"No scraper profile configured for '{domain}'. "
+                f"Supported sites: {', '.join(self.sites.keys())}"
+            )
+        return self.sites[domain]
 
 
 # --------------- Translation Settings ---------------
 
 class TranslationSettings(BaseModel):
-    model_path: str = "nllb-1.3b-ct2"
-    tokenizer_path: str = "nllb_tokenizer.model"
-    source_lang: str = "zho_Hans"
-    target_lang: str = "eng_Latn"
+    model_path: str = "Helsinki-NLP/opus-mt-zh-en"
     beam_size: int = 4
     max_decoding_length: int = 512
     device: str = "cuda"
@@ -77,8 +91,12 @@ class AppConfig(BaseModel):
     @classmethod
     def from_yaml(cls, config_path: Path | None = None) -> "AppConfig":
         raw = load_config(config_path)
+        scraper_raw = raw.get("scraper", {})
+        # Parse site profiles from nested dict
+        sites_raw = scraper_raw.pop("sites", {})
+        sites = {domain: SiteProfile(**profile) for domain, profile in sites_raw.items()}
         return cls(
-            scraper=ScraperSettings(**raw.get("scraper", {})),
+            scraper=ScraperSettings(**scraper_raw, sites=sites),
             translation=TranslationSettings(**raw.get("translation", {})),
             tts=TTSSettings(**raw.get("tts", {})),
             server=ServerSettings(**raw.get("server", {})),

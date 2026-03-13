@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment / secrets
+.env
+.env.*
+
+# Data (runtime-generated)
+data/audiobooks.db
+data/novels/
+data/dictionaries/
+
+# ML models (large, downloaded at runtime)
+nllb-1.3b-ct2/
+nllb-1.3b-ct2-fp16/
+
+# Audio test artifacts
+xtts_test.wav
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Redis
+dump.rdb
