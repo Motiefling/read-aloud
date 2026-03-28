@@ -15,7 +15,10 @@
     <div id="library-view" class="view active">
         <header>
             <h1>My Light Novels</h1>
-            <button id="btn-request-novel" aria-label="Request new novel">+</button>
+            <div style="display: flex; gap: 0.5rem;">
+                <button id="btn-settings" aria-label="Settings" title="Voice settings">&#9881;</button>
+                <button id="btn-request-novel" aria-label="Request new novel">+</button>
+            </div>
         </header>
         <div id="novel-list" class="content">
             <!-- Novel cards rendered by app.js -->
@@ -27,9 +30,28 @@
         <header>
             <button id="btn-back-library" aria-label="Back to library">&larr;</button>
             <h1 id="chapters-title">Novel Title</h1>
+            <div style="display: flex; gap: 0.5rem;">
+                <button id="btn-add-chapters" aria-label="Download more chapters" title="Download more chapters">+</button>
+                <button id="btn-check-updates" aria-label="Check for new chapters" title="Check for new chapters">&#x21bb;</button>
+            </div>
         </header>
+        <div id="job-status" class="hidden">
+            <!-- Active job progress rendered by app.js -->
+        </div>
         <div id="chapter-list" class="content">
             <!-- Chapter items rendered by app.js -->
+        </div>
+    </div>
+
+    <!-- Settings/Voice View -->
+    <div id="settings-view" class="view">
+        <header>
+            <button id="btn-back-from-settings" aria-label="Back to library">&larr;</button>
+            <h1>Voice Settings</h1>
+        </header>
+        <p id="current-voice-label" style="color: var(--text-secondary); margin-bottom: 1rem;"></p>
+        <div id="voice-list" class="content">
+            <!-- Voice cards rendered by app.js -->
         </div>
     </div>
 
@@ -39,12 +61,35 @@
             <h2>Request New Novel</h2>
             <form id="request-form">
                 <label for="novel-url">Novel URL</label>
-                <input type="url" id="novel-url" placeholder="https://www.ttkan.co/..." required>
+                <input type="url" id="novel-url" placeholder="https://funs.me/book/..." required>
                 <label for="novel-title">Title (optional)</label>
                 <input type="text" id="novel-title" placeholder="Novel title">
+                <label for="novel-max-chapters">Chapters to download</label>
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <input type="number" id="novel-max-chapters" min="1" placeholder="All" style="flex:1;">
+                    <span style="color: var(--text-secondary); font-size: 0.85rem;">Leave blank for all</span>
+                </div>
                 <div class="modal-actions">
                     <button type="button" id="btn-cancel-request">Cancel</button>
                     <button type="submit">Submit</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Add Chapters Modal -->
+    <div id="add-chapters-modal" class="modal hidden">
+        <div class="modal-content">
+            <h2>Download More Chapters</h2>
+            <form id="add-chapters-form">
+                <label for="add-chapters-count">How many more chapters?</label>
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <input type="number" id="add-chapters-count" min="1" placeholder="All remaining" style="flex:1;">
+                    <span style="color: var(--text-secondary); font-size: 0.85rem;">Leave blank for all</span>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" id="btn-cancel-add-chapters">Cancel</button>
+                    <button type="submit">Download</button>
                 </div>
             </form>
         </div>

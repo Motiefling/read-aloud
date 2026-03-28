@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip show:*)",
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:github.com)",
+      "Bash(pip install:*)",
+      "WebSearch",
+      "Bash(python -c \"import sys; print\\(sys.version\\); print\\(sys.executable\\)\")",
+      "Bash(pip --version)",
+      "Bash(python -c \":*)",
+      "Bash(timeout 8 python -c \":*)",
+      "WebFetch(domain:www.69shuba.com)",
+      "WebFetch(domain:ixdzs8.com)",
+      "WebFetch(domain:www.dxmwx.org)",
+      "WebFetch(domain:www.piaotia.com)",
+      "WebFetch(domain:www.ttkan.co)",
+      "Bash(curl -s -L -A \"Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/120.0.0.0 Safari/537.36\" \"https://www.69shuba.com/book/41516.htm\" -o /tmp/69shuba_toc.html)",
+      "Read(//tmp/**)",
+      "Bash(curl -s -L -A \"Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/120.0.0.0 Safari/537.36\" \"https://www.piaotia.com/bookinfo/6/6185.html\" -o /tmp/piaotia_toc.html)"
+    ]
+  }
+}

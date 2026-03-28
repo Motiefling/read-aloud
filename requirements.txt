@@ -8,6 +8,8 @@ ctranslate2
 sentencepiece
 transformers
 ffmpeg-python
+kokoro>=0.9.4
+soundfile
 aiosqlite
 sqlalchemy
 pydantic

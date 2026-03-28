@@ -10,6 +10,12 @@ class NovelRequest(BaseModel):
     url: str
     title: str | None = None
     dictionary_id: str | None = None
+    max_chapters: int | None = None  # None = download all
+
+
+class AddChaptersRequest(BaseModel):
+    """Request to add more chapters to an existing novel."""
+    max_chapters: int | None = None  # None = download all remaining
 
 
 class PlaybackStateUpdate(BaseModel):

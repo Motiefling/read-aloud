@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
+from app.config import BASE_DIR
+from app.database import get_db
 from app.models import ChapterResponse, PlaybackStateUpdate, PlaybackStateResponse
 
 router = APIRouter()
@@ -9,23 +11,67 @@ router = APIRouter()
 @router.get("/{novel_id}/chapters", response_model=list[ChapterResponse])
 async def list_chapters(novel_id: str):
     """List all chapters for a novel."""
-    # TODO: Query chapters for novel_id from DB
-    raise HTTPException(501, "Not implemented")
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, novel_id, chapter_number, title, status, "
+            "audio_duration_seconds, audio_file_size_bytes "
+            "FROM chapters WHERE novel_id = ? ORDER BY chapter_number",
+            (novel_id,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        await db.close()
 
 
 @router.get("/{novel_id}/chapters/{chapter_num}", response_model=ChapterResponse)
 async def get_chapter(novel_id: str, chapter_num: int):
     """Get chapter metadata."""
-    # TODO: Query chapter by novel_id and chapter_number from DB
-    raise HTTPException(501, "Not implemented")
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, novel_id, chapter_number, title, status, "
+            "audio_duration_seconds, audio_file_size_bytes "
+            "FROM chapters WHERE novel_id = ? AND chapter_number = ?",
+            (novel_id, chapter_num),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise HTTPException(404, "Chapter not found")
+        return dict(row)
+    finally:
+        await db.close()
 
 
 @router.get("/{novel_id}/chapters/{chapter_num}/audio")
 async def stream_chapter_audio(novel_id: str, chapter_num: int):
     """Stream or download the audio file for a specific chapter."""
-    # TODO: Look up audio_path from DB, return FileResponse
-    # return FileResponse(audio_path, media_type="audio/mpeg", headers={"Accept-Ranges": "bytes"})
-    raise HTTPException(501, "Not implemented")
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT audio_path FROM chapters "
+            "WHERE novel_id = ? AND chapter_number = ?",
+            (novel_id, chapter_num),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise HTTPException(404, "Chapter not found")
+        if not row["audio_path"]:
+            raise HTTPException(404, "Audio not yet generated for this chapter")
+    finally:
+        await db.close()
+
+    audio_path = BASE_DIR / row["audio_path"]
+    if not audio_path.exists():
+        raise HTTPException(404, "Audio file not found on disk")
+
+    return FileResponse(
+        str(audio_path),
+        media_type="audio/mpeg",
+        filename=f"chapter_{chapter_num:04d}.mp3",
+        headers={"Accept-Ranges": "bytes"},
+    )
 
 
 # --- Playback State ---
@@ -33,12 +79,41 @@ async def stream_chapter_audio(novel_id: str, chapter_num: int):
 @router.get("/{novel_id}/playback", response_model=PlaybackStateResponse)
 async def get_playback_state(novel_id: str):
     """Get the last playback position for a novel."""
-    # TODO: Query playback_state from DB
-    raise HTTPException(501, "Not implemented")
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT novel_id, chapter_number, position_seconds, "
+            "playback_speed, updated_at "
+            "FROM playback_state WHERE novel_id = ?",
+            (novel_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return PlaybackStateResponse(
+                novel_id=novel_id, chapter_number=1, position_seconds=0, playback_speed=2.0,
+            )
+        return dict(row)
+    finally:
+        await db.close()
 
 
 @router.put("/{novel_id}/playback")
 async def save_playback_state(novel_id: str, state: PlaybackStateUpdate):
     """Save playback position for a novel."""
-    # TODO: Upsert playback_state in DB
-    raise HTTPException(501, "Not implemented")
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT INTO playback_state (novel_id, chapter_number, position_seconds, playback_speed) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(novel_id) DO UPDATE SET "
+            "chapter_number = excluded.chapter_number, "
+            "position_seconds = excluded.position_seconds, "
+            "playback_speed = excluded.playback_speed, "
+            "updated_at = CURRENT_TIMESTAMP",
+            (novel_id, state.chapter_number, state.position_seconds, state.playback_speed),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    return {"status": "saved"}

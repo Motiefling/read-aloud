@@ -151,6 +151,36 @@ async def scrape_chapter(client: httpx.AsyncClient, url: str, domain: str, profi
     }
 
 
+async def resolve_start_url(url: str) -> str:
+    """
+    If the URL is a TOC/book page, parse it to find the first chapter URL.
+    If it's already a chapter URL, return it as-is.
+
+    Supports:
+        - funs.me book pages:    /book/{id}.html  -> first chapter from TOC
+        - funs.me chapter pages: /mtext/{id}/{id}.html  -> returned as-is
+    """
+    domain, profile = get_site_profile(url)
+
+    if domain == "funs.me":
+        # Chapter URLs match /mtext/{book_id}/{chapter_id}.html
+        if re.search(r"/mtext/\d+/\d+\.html", url):
+            return url
+        # /text/ links also point to chapters — just convert to /mtext/
+        if re.search(r"/text/\d+/\d+\.html", url):
+            return url.replace("/text/", "/mtext/")
+        # TOC/book URLs match /book/{id}.html or similar non-chapter paths
+        # Try parsing as TOC to get chapter list
+        chapter_urls = await scrape_table_of_contents(url)
+        if not chapter_urls:
+            raise ScrapingError(f"No chapters found on TOC page: {url}")
+        logger.info("Resolved TOC URL to %d chapters, starting from first.", len(chapter_urls))
+        return chapter_urls[0]
+
+    # For unknown patterns, assume it's a chapter URL
+    return url
+
+
 async def scrape_novel(
     start_url: str,
     novel_id: str,
@@ -159,10 +189,14 @@ async def scrape_novel(
 ) -> list[dict]:
     """
     Scrape all chapters of a novel starting from the given URL.
+
+    Accepts either a chapter URL or a TOC/book URL — if a TOC URL is given,
+    it resolves to the first chapter automatically.
+
     Follows next-page links until no more chapters are found.
 
     Args:
-        start_url: URL of the first chapter to scrape.
+        start_url: URL of the first chapter or a TOC/book page.
         novel_id: Identifier for this novel (used in returned dicts).
         max_chapters: Optional cap on how many chapters to scrape.
         on_chapter: Optional async callback called after each chapter is scraped,
@@ -171,6 +205,7 @@ async def scrape_novel(
     Returns:
         List of chapter dicts.
     """
+    start_url = await resolve_start_url(start_url)
     domain, profile = get_site_profile(start_url)
     config = settings.scraper
 
@@ -190,6 +225,7 @@ async def scrape_novel(
 
             logger.info("Scraping chapter %d: %s", chapter_number, current_url)
 
+            result = None
             for attempt in range(1, config.max_retries + 1):
                 try:
                     result = await scrape_chapter(client, current_url, domain, profile)
@@ -200,20 +236,39 @@ async def scrape_novel(
                         e.response.status_code, attempt, config.max_retries, current_url,
                     )
                     if attempt == config.max_retries:
-                        raise ScrapingError(
-                            f"Failed to fetch {current_url} after {config.max_retries} attempts: {e}"
-                        ) from e
-                    await asyncio.sleep(config.request_delay_seconds * attempt)
+                        # If we already have chapters, stop gracefully instead of crashing
+                        if chapters:
+                            logger.info(
+                                "Stopping scrape after %d chapters — next URL failed: %s",
+                                len(chapters), current_url,
+                            )
+                        else:
+                            raise ScrapingError(
+                                f"Failed to fetch {current_url} after {config.max_retries} attempts: {e}"
+                            ) from e
+                    else:
+                        await asyncio.sleep(config.request_delay_seconds * attempt)
                 except httpx.RequestError as e:
                     logger.warning(
                         "Request error on attempt %d/%d for %s: %s",
                         attempt, config.max_retries, current_url, e,
                     )
                     if attempt == config.max_retries:
-                        raise ScrapingError(
-                            f"Failed to fetch {current_url} after {config.max_retries} attempts: {e}"
-                        ) from e
-                    await asyncio.sleep(config.request_delay_seconds * attempt)
+                        if chapters:
+                            logger.info(
+                                "Stopping scrape after %d chapters — next URL failed: %s",
+                                len(chapters), current_url,
+                            )
+                        else:
+                            raise ScrapingError(
+                                f"Failed to fetch {current_url} after {config.max_retries} attempts: {e}"
+                            ) from e
+                    else:
+                        await asyncio.sleep(config.request_delay_seconds * attempt)
+
+            # If fetch failed after retries and we have previous chapters, stop here
+            if result is None:
+                break
 
             chapter = {
                 "novel_id": novel_id,

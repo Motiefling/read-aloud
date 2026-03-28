@@ -9,6 +9,7 @@ from app.api.novels import router as novels_router
 from app.api.chapters import router as chapters_router
 from app.api.jobs import router as jobs_router
 from app.api.dictionaries import router as dictionaries_router
+from app.api.settings import router as settings_router
 from app.api.websocket import router as websocket_router
 
 
@@ -31,6 +32,7 @@ app.include_router(novels_router, prefix="/api/novels", tags=["novels"])
 app.include_router(chapters_router, prefix="/api/novels", tags=["chapters"])
 app.include_router(jobs_router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(dictionaries_router, prefix="/api/dictionaries", tags=["dictionaries"])
+app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 app.include_router(websocket_router, tags=["websocket"])
 
 # --- Serve PWA static files ---

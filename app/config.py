@@ -23,8 +23,10 @@ class SiteProfile(BaseModel):
     content_selector: str | None = None
     next_page_selector: str | None = None
     title_selector: str | None = None
+    toc_selector: str | None = None
     toc_url_pattern: str | None = None
     chapter_url_pattern: str | None = None
+    encoding: str | None = None  # Override response encoding (e.g. "gbk")
     notes: str | None = None
 
 
@@ -57,10 +59,14 @@ class TranslationSettings(BaseModel):
 # --------------- TTS Settings ---------------
 
 class TTSSettings(BaseModel):
-    engine: str = "tbd"
-    sample_rate: int = 22050
+    engine: str = "kokoro"
+    voice: str = "af_heart"
+    speed: float = 1.0
+    lang_code: str = "a"
+    device: str = "cuda"
+    sample_rate: int = 24000
     output_format: str = "mp3"
-    pause_between_chunks_ms: int = 500
+    pause_between_paragraphs_ms: int = 700
 
 
 # --------------- Server Settings ---------------

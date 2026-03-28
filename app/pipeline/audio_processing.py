@@ -1,42 +1,94 @@
 """
 Audio processing utilities using FFmpeg.
 
-Handles audio concatenation, format conversion, and speed adjustment.
+Handles format conversion, speed adjustment, and duration detection.
+Audio concatenation with silence gaps is handled in-memory via numpy
+in the TTS pipeline (tts.py) to avoid unnecessary disk I/O.
 """
 
+import json
+import logging
+import subprocess
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
 
-def concatenate_audio(chunk_paths: list[Path], output_path: Path, pause_ms: int = 500) -> None:
-    """
-    Concatenate WAV chunks into a single MP3 with pauses between them.
 
-    Uses FFmpeg concat demuxer to join audio files with silence gaps.
+def convert_to_mp3(input_path: Path, output_path: Path, quality: int = 2) -> None:
     """
-    # TODO: Implement FFmpeg-based audio concatenation
-    # - Generate a silence file for pauses
-    # - Create a concat list file
-    # - Run ffmpeg -f concat to produce final MP3
-    raise NotImplementedError
+    Convert an audio file to MP3 format using FFmpeg.
+
+    Args:
+        input_path: Source audio file (WAV, etc.)
+        output_path: Destination MP3 file.
+        quality: VBR quality level (0=best, 9=worst). Default 2 (~190kbps).
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(input_path),
+        "-codec:a", "libmp3lame",
+        "-qscale:a", str(quality),
+        "-vn",
+        str(output_path),
+    ]
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=300,
+    )
+    if result.returncode != 0:
+        logger.error("FFmpeg conversion failed: %s", result.stderr)
+        raise RuntimeError(f"FFmpeg failed (exit {result.returncode}): {result.stderr[:500]}")
 
 
 def adjust_playback_speed(input_path: Path, output_path: Path, speed: float = 2.0) -> None:
     """
     Generate a speed-adjusted copy of an audio file using FFmpeg's atempo filter.
-    Does not change pitch.
+    Does not change pitch. atempo range is 0.5–100.0; values outside 0.5–2.0
+    are chained automatically.
     """
-    # TODO: Implement FFmpeg atempo speed adjustment
-    # ffmpeg -i input.wav -filter:a "atempo=2.0" -vn output.wav
-    raise NotImplementedError
+    # atempo only accepts 0.5..2.0 per filter, so chain multiple for larger values
+    filters = []
+    remaining = speed
+    while remaining > 2.0:
+        filters.append("atempo=2.0")
+        remaining /= 2.0
+    while remaining < 0.5:
+        filters.append("atempo=0.5")
+        remaining /= 0.5
+    filters.append(f"atempo={remaining:.4f}")
 
+    filter_str = ",".join(filters)
 
-def convert_to_mp3(input_path: Path, output_path: Path, quality: int = 2) -> None:
-    """Convert an audio file to MP3 format using FFmpeg."""
-    # TODO: Implement format conversion
-    raise NotImplementedError
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(input_path),
+        "-filter:a", filter_str,
+        "-vn",
+        str(output_path),
+    ]
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=300,
+    )
+    if result.returncode != 0:
+        logger.error("FFmpeg speed adjustment failed: %s", result.stderr)
+        raise RuntimeError(f"FFmpeg failed (exit {result.returncode}): {result.stderr[:500]}")
 
 
 def get_audio_duration(file_path: Path) -> float:
-    """Get the duration of an audio file in seconds using FFmpeg."""
-    # TODO: Implement duration detection via ffprobe
-    raise NotImplementedError
+    """Get the duration of an audio file in seconds using ffprobe."""
+    cmd = [
+        "ffprobe",
+        "-v", "quiet",
+        "-print_format", "json",
+        "-show_format",
+        str(file_path),
+    ]
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe failed (exit {result.returncode}): {result.stderr[:500]}")
+
+    info = json.loads(result.stdout)
+    return float(info["format"]["duration"])
