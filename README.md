@@ -2,6 +2,10 @@
 
 Chinese light novel to English audiobook pipeline. Scrapes novels from supported sites, translates Chinese to English using Opus-MT, and (soon) generates TTS audio — all served via a FastAPI + PWA interface.
 
+## Project Board
+
+Track progress and planned features on the [Trello board](https://trello.com/b/T7eSVh01/read-aloud-tts).
+
 ## Current Status
 
 **Working:**

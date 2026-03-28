@@ -14,8 +14,12 @@ venv/
 # IDE
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
+
+# Testing
+.pytest_cache/
 
 # Environment / secrets
 .env
