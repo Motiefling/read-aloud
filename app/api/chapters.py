@@ -3,7 +3,7 @@ from fastapi.responses import FileResponse
 
 from app.config import BASE_DIR
 from app.database import get_db
-from app.models import ChapterResponse, PlaybackStateUpdate, PlaybackStateResponse
+from app.models import ChapterResponse, PlaybackStateUpdate, PlaybackStateResponse, RenameRequest
 
 router = APIRouter()
 
@@ -42,6 +42,27 @@ async def get_chapter(novel_id: str, chapter_num: int):
         return dict(row)
     finally:
         await db.close()
+
+
+@router.patch("/{novel_id}/chapters/{chapter_num}")
+async def rename_chapter(novel_id: str, chapter_num: int, request: RenameRequest):
+    """Rename a chapter."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id FROM chapters WHERE novel_id = ? AND chapter_number = ?",
+            (novel_id, chapter_num),
+        )
+        if await cursor.fetchone() is None:
+            raise HTTPException(404, "Chapter not found")
+        await db.execute(
+            "UPDATE chapters SET title = ? WHERE novel_id = ? AND chapter_number = ?",
+            (request.title, novel_id, chapter_num),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return {"status": "updated"}
 
 
 @router.get("/{novel_id}/chapters/{chapter_num}/audio")

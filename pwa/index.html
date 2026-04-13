@@ -29,8 +29,9 @@
     <div id="chapters-view" class="view">
         <header>
             <button id="btn-back-library" aria-label="Back to library">&larr;</button>
-            <h1 id="chapters-title">Novel Title</h1>
+            <h1 id="chapters-title"><a id="chapters-title-link" href="#" target="_blank" rel="noopener">Novel Title</a></h1>
             <div style="display: flex; gap: 0.5rem;">
+                <button id="btn-rename-novel" aria-label="Rename novel" title="Rename novel">&#9998;</button>
                 <button id="btn-add-chapters" aria-label="Download more chapters" title="Download more chapters">+</button>
                 <button id="btn-check-updates" aria-label="Check for new chapters" title="Check for new chapters">&#x21bb;</button>
             </div>
@@ -64,6 +65,8 @@
                 <input type="url" id="novel-url" placeholder="https://funs.me/book/..." required>
                 <label for="novel-title">Title (optional)</label>
                 <input type="text" id="novel-title" placeholder="Novel title">
+                <label for="novel-start-url">Starting chapter URL (optional)</label>
+                <input type="url" id="novel-start-url" placeholder="Skip to a specific chapter">
                 <label for="novel-max-chapters">Chapters to download</label>
                 <div style="display: flex; align-items: center; gap: 0.5rem;">
                     <input type="number" id="novel-max-chapters" min="1" placeholder="All" style="flex:1;">
@@ -82,6 +85,8 @@
         <div class="modal-content">
             <h2>Download More Chapters</h2>
             <form id="add-chapters-form">
+                <label for="add-chapters-start-url">Starting chapter URL (optional)</label>
+                <input type="url" id="add-chapters-start-url" placeholder="Continue from a specific chapter">
                 <label for="add-chapters-count">How many more chapters?</label>
                 <div style="display: flex; align-items: center; gap: 0.5rem;">
                     <input type="number" id="add-chapters-count" min="1" placeholder="All remaining" style="flex:1;">

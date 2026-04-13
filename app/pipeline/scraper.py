@@ -4,19 +4,27 @@ Web scraper for extracting Chinese light novel text from supported sites.
 Supports multiple sites via per-site configuration profiles.
 Fetches chapter pages, extracts story content using CSS selectors,
 and follows next-chapter links to chain chapters together.
+
+Uses httpx for simple sites and Playwright (headless Chromium) for sites
+with anti-bot protection (Cloudflare, JS challenges, etc.).
 """
 
 import asyncio
 import logging
 import re
+from contextlib import asynccontextmanager
+from typing import Callable, Awaitable
 from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup, NavigableString
 
-from app.config import settings, SiteProfile
+from app.config import settings, SiteProfile, ScraperSettings
 
 logger = logging.getLogger(__name__)
+
+# Type alias: an async callable that fetches a URL and returns parsed HTML
+FetchFn = Callable[[str], Awaitable[BeautifulSoup]]
 
 
 class ScrapingError(Exception):
@@ -42,11 +50,59 @@ def get_site_profile(url: str) -> tuple[str, SiteProfile]:
         raise UnsupportedSiteError(str(e)) from e
 
 
+# ---------------------------------------------------------------------------
+# Fetcher abstraction — httpx for simple sites, Playwright for protected ones
+# ---------------------------------------------------------------------------
+
 async def _fetch_page(client: httpx.AsyncClient, url: str) -> BeautifulSoup:
-    """Fetch a page and return a parsed BeautifulSoup object."""
+    """Fetch a page via httpx and return a parsed BeautifulSoup object."""
     response = await client.get(url)
     response.raise_for_status()
     return BeautifulSoup(response.text, "lxml")
+
+
+@asynccontextmanager
+async def _create_fetcher(profile: SiteProfile, config: ScraperSettings):
+    """
+    Create a fetch function appropriate for the site.
+
+    Yields an async callable: fetch(url) -> BeautifulSoup
+
+    For sites with use_browser=True, launches a headless Chromium browser
+    via Playwright. Otherwise uses httpx.
+    """
+    if profile.use_browser:
+        from playwright.async_api import async_playwright
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(user_agent=config.user_agent)
+            page = await context.new_page()
+            wait_ms = profile.browser_wait_time or 5000
+
+            async def fetch_browser(url: str) -> BeautifulSoup:
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                await page.wait_for_timeout(wait_ms)
+                # Wait for any JS redirects (e.g. anti-bot challenges) to settle
+                await page.wait_for_load_state("domcontentloaded")
+                html = await page.content()
+                return BeautifulSoup(html, "lxml")
+
+            try:
+                yield fetch_browser
+            finally:
+                await browser.close()
+    else:
+        async with httpx.AsyncClient(
+            headers={"User-Agent": config.user_agent},
+            follow_redirects=True,
+            timeout=30.0,
+        ) as client:
+            async def fetch_httpx(url: str) -> BeautifulSoup:
+                response = await client.get(url)
+                response.raise_for_status()
+                return BeautifulSoup(response.text, "lxml")
+
+            yield fetch_httpx
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +111,7 @@ async def _fetch_page(client: httpx.AsyncClient, url: str) -> BeautifulSoup:
 # When it's None, we fall back to site-specific heuristics.
 # ---------------------------------------------------------------------------
 
-def _extract_content(soup: BeautifulSoup, profile: SiteProfile, url: str) -> str:
+def _extract_content(soup: BeautifulSoup, domain: str, profile: SiteProfile, url: str) -> str:
     """Extract the story text from a chapter page."""
     if not profile.content_selector:
         raise ScrapingError(f"No content_selector configured for this site ({url})")
@@ -65,6 +121,16 @@ def _extract_content(soup: BeautifulSoup, profile: SiteProfile, url: str) -> str
         raise ScrapingError(
             f"Content element '{profile.content_selector}' not found at {url}"
         )
+
+    # --- Site-specific content cleanup ---
+
+    if domain == "piaotia.com":
+        # #content contains mixed nav elements (h1, div.toplink, table, <a> tags)
+        # alongside bare text nodes that hold the actual chapter content.
+        # Remove all structured elements to leave only the text.
+        for tag in element.find_all(["h1", "table", "div", "a", "script"]):
+            tag.decompose()
+
     return element.get_text(separator="\n", strip=True)
 
 
@@ -123,6 +189,39 @@ def _extract_next_url(soup: BeautifulSoup, domain: str, profile: SiteProfile, cu
                     return next_url
         return None
 
+    if domain == "dxmwx.org":
+        # Navigation links are bare <a> tags with text "下一章".
+        # Sentinel href ending in "_0.html" means no next chapter.
+        for a in soup.find_all("a", href=True):
+            if "下一章" in a.get_text():
+                href = a["href"]
+                if href.endswith("_0.html"):
+                    return None
+                return urljoin(current_url, href)
+        return None
+
+    if domain == "piaotia.com":
+        # Navigation links are bare <a> tags with text "下一章".
+        # Chapter hrefs are numeric like "3356132.html"; non-chapter = "index.html" or "./"
+        for a in soup.find_all("a", href=True):
+            if "下一章" in a.get_text():
+                href = a["href"]
+                if re.match(r"\d+\.html$", href):
+                    return urljoin(current_url, href)
+                return None
+        return None
+
+    if domain == "ixdzs8.com":
+        # Navigation links are bare <a> tags with text "下一章".
+        # Chapter hrefs match /read/{id}/p{num}.html; TOC link is /read/{id}/
+        for a in soup.find_all("a", href=True):
+            if "下一章" in a.get_text():
+                href = a["href"]
+                if re.search(r"/read/\d+/p\d+\.html", href):
+                    return urljoin(current_url, href)
+                return None
+        return None
+
     return None
 
 
@@ -130,18 +229,23 @@ def _extract_next_url(soup: BeautifulSoup, domain: str, profile: SiteProfile, cu
 # Public API
 # ---------------------------------------------------------------------------
 
-async def scrape_chapter(client: httpx.AsyncClient, url: str, domain: str, profile: SiteProfile) -> dict:
+async def scrape_chapter(fetch_fn: FetchFn, url: str, domain: str, profile: SiteProfile) -> dict:
     """
     Scrape a single chapter page and return its content.
+
+    Args:
+        fetch_fn: Async callable that fetches a URL and returns BeautifulSoup.
 
     Returns:
         dict with keys: title, chinese_text, source_url, next_url
     """
-    soup = await _fetch_page(client, url)
+    soup = await fetch_fn(url)
 
-    chinese_text = _extract_content(soup, profile, url)
+    # Extract title and next_url before content, because content extraction
+    # may decompose elements in the soup (e.g. piaotia strips nav from #content).
     title = _extract_title(soup, domain, profile)
     next_url = _extract_next_url(soup, domain, profile, url)
+    chinese_text = _extract_content(soup, domain, profile, url)
 
     return {
         "title": title,
@@ -155,10 +259,6 @@ async def resolve_start_url(url: str) -> str:
     """
     If the URL is a TOC/book page, parse it to find the first chapter URL.
     If it's already a chapter URL, return it as-is.
-
-    Supports:
-        - funs.me book pages:    /book/{id}.html  -> first chapter from TOC
-        - funs.me chapter pages: /mtext/{id}/{id}.html  -> returned as-is
     """
     domain, profile = get_site_profile(url)
 
@@ -170,12 +270,67 @@ async def resolve_start_url(url: str) -> str:
         if re.search(r"/text/\d+/\d+\.html", url):
             return url.replace("/text/", "/mtext/")
         # TOC/book URLs match /book/{id}.html or similar non-chapter paths
-        # Try parsing as TOC to get chapter list
         chapter_urls = await scrape_table_of_contents(url)
         if not chapter_urls:
             raise ScrapingError(f"No chapters found on TOC page: {url}")
         logger.info("Resolved TOC URL to %d chapters, starting from first.", len(chapter_urls))
         return chapter_urls[0]
+
+    if domain == "dxmwx.org":
+        # Chapter URLs match /read/{book_id}_{chapter_id}.html
+        if re.search(r"/read/\d+_\d+\.html", url):
+            return url
+        # Book/TOC URLs match /book/{id}.html — resolve via TOC
+        chapter_urls = await scrape_table_of_contents(url)
+        if not chapter_urls:
+            raise ScrapingError(f"No chapters found on TOC page: {url}")
+        logger.info("Resolved TOC URL to %d chapters, starting from first.", len(chapter_urls))
+        return chapter_urls[0]
+
+    if domain == "ttkan.co":
+        # Chapter URLs match /novel/pagea/{slug}_{number}.html
+        if re.search(r"/novel/pagea/.+_\d+\.html", url):
+            return url
+        # TOC URLs match /novel/chapters/{slug} — resolve via TOC
+        chapter_urls = await scrape_table_of_contents(url)
+        if not chapter_urls:
+            raise ScrapingError(f"No chapters found on TOC page: {url}")
+        logger.info("Resolved TOC URL to %d chapters, starting from first.", len(chapter_urls))
+        return chapter_urls[0]
+
+    if domain == "piaotia.com":
+        # Chapter URLs match /html/{group}/{book_id}/{chapter_id}.html
+        if re.search(r"/html/\d+/\d+/\d+\.html", url):
+            return url
+        # Book info page /bookinfo/{group}/{book_id}.html -> chapter list at /html/{group}/{book_id}/
+        m = re.search(r"/bookinfo/(\d+)/(\d+)\.html", url)
+        if m:
+            group, book_id = m.groups()
+            toc_url = urljoin(url, f"/html/{group}/{book_id}/")
+            chapter_urls = await scrape_table_of_contents(toc_url)
+            if not chapter_urls:
+                raise ScrapingError(f"No chapters found on TOC page: {toc_url}")
+            logger.info("Resolved book info URL to %d chapters, starting from first.", len(chapter_urls))
+            return chapter_urls[0]
+        # Chapter list page /html/{group}/{book_id}/ — resolve via TOC
+        chapter_urls = await scrape_table_of_contents(url)
+        if not chapter_urls:
+            raise ScrapingError(f"No chapters found on TOC page: {url}")
+        logger.info("Resolved TOC URL to %d chapters, starting from first.", len(chapter_urls))
+        return chapter_urls[0]
+
+    if domain == "ixdzs8.com":
+        # Chapter URLs match /read/{book_id}/p{number}.html
+        if re.search(r"/read/\d+/p\d+\.html", url):
+            return url
+        # TOC URL is /read/{book_id}/ — AJAX chapter list is unreliable,
+        # but chapters follow sequential p1, p2, ... pattern. Start from p1.
+        m = re.search(r"/read/(\d+)/?$", url)
+        if m:
+            first_chapter = urljoin(url.rstrip("/") + "/", "p1.html")
+            logger.info("Resolved TOC URL to first chapter: %s", first_chapter)
+            return first_chapter
+        return url
 
     # For unknown patterns, assume it's a chapter URL
     return url
@@ -186,6 +341,8 @@ async def scrape_novel(
     novel_id: str,
     max_chapters: int | None = None,
     on_chapter: callable = None,
+    start_number: int = 1,
+    cancel_check: callable = None,
 ) -> list[dict]:
     """
     Scrape all chapters of a novel starting from the given URL.
@@ -201,6 +358,9 @@ async def scrape_novel(
         max_chapters: Optional cap on how many chapters to scrape.
         on_chapter: Optional async callback called after each chapter is scraped,
                     receives (chapter_number, chapter_dict).
+        start_number: Chapter number to start counting from (for log messages).
+        cancel_check: Optional callable that returns True if scraping should stop
+                      (e.g. because the job was cancelled).
 
     Returns:
         List of chapter dicts.
@@ -211,15 +371,16 @@ async def scrape_novel(
 
     chapters = []
     current_url = start_url
-    chapter_number = 1
+    chapter_number = start_number
+    scraped_count = 0
 
-    async with httpx.AsyncClient(
-        headers={"User-Agent": config.user_agent},
-        follow_redirects=True,
-        timeout=30.0,
-    ) as client:
+    async with _create_fetcher(profile, config) as fetch:
         while current_url:
-            if max_chapters and chapter_number > max_chapters:
+            if cancel_check and cancel_check():
+                logger.info("Scraping cancelled after %d chapters.", scraped_count)
+                break
+
+            if max_chapters and scraped_count >= max_chapters:
                 logger.info("Reached max_chapters cap (%d), stopping.", max_chapters)
                 break
 
@@ -228,29 +389,13 @@ async def scrape_novel(
             result = None
             for attempt in range(1, config.max_retries + 1):
                 try:
-                    result = await scrape_chapter(client, current_url, domain, profile)
+                    result = await scrape_chapter(fetch, current_url, domain, profile)
                     break
-                except httpx.HTTPStatusError as e:
+                except ScrapingError:
+                    raise  # Don't retry parse errors
+                except Exception as e:
                     logger.warning(
-                        "HTTP %d on attempt %d/%d for %s",
-                        e.response.status_code, attempt, config.max_retries, current_url,
-                    )
-                    if attempt == config.max_retries:
-                        # If we already have chapters, stop gracefully instead of crashing
-                        if chapters:
-                            logger.info(
-                                "Stopping scrape after %d chapters — next URL failed: %s",
-                                len(chapters), current_url,
-                            )
-                        else:
-                            raise ScrapingError(
-                                f"Failed to fetch {current_url} after {config.max_retries} attempts: {e}"
-                            ) from e
-                    else:
-                        await asyncio.sleep(config.request_delay_seconds * attempt)
-                except httpx.RequestError as e:
-                    logger.warning(
-                        "Request error on attempt %d/%d for %s: %s",
+                        "Error on attempt %d/%d for %s: %s",
                         attempt, config.max_retries, current_url, e,
                     )
                     if attempt == config.max_retries:
@@ -276,6 +421,7 @@ async def scrape_novel(
                 **result,
             }
             chapters.append(chapter)
+            scraped_count += 1
 
             if on_chapter:
                 await on_chapter(chapter_number, chapter)
@@ -300,25 +446,57 @@ async def scrape_table_of_contents(toc_url: str) -> list[str]:
     domain, profile = get_site_profile(toc_url)
     config = settings.scraper
 
-    async with httpx.AsyncClient(
-        headers={"User-Agent": config.user_agent},
-        follow_redirects=True,
-        timeout=30.0,
-    ) as client:
-        soup = await _fetch_page(client, toc_url)
+    async with _create_fetcher(profile, config) as fetch:
+        soup = await fetch(toc_url)
 
-    # --- Site-specific TOC parsing ---
+        # --- Site-specific TOC parsing ---
 
-    if domain == "funs.me":
-        # TOC page lists all chapters as <a> tags with href like /text/{book_id}/{chapter_id}.html
-        # We need to convert /text/ URLs to /mtext/ since that's what chapter pages actually use.
-        chapter_links = []
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            if re.search(r"/text/\d+/\d+\.html$", href):
-                # Convert /text/ to /mtext/ for actual chapter page URLs
-                chapter_url = urljoin(toc_url, href.replace("/text/", "/mtext/"))
-                chapter_links.append(chapter_url)
-        return chapter_links
+        if domain == "funs.me":
+            # TOC page lists all chapters as <a> tags with href like /text/{book_id}/{chapter_id}.html
+            # We need to convert /text/ URLs to /mtext/ since that's what chapter pages actually use.
+            chapter_links = []
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if re.search(r"/text/\d+/\d+\.html$", href):
+                    chapter_url = urljoin(toc_url, href.replace("/text/", "/mtext/"))
+                    chapter_links.append(chapter_url)
+            return chapter_links
+
+        if domain == "dxmwx.org":
+            # Two-level TOC: book page lists chapter range pages, each range page lists chapters.
+            range_links = []
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if re.search(r"/chapternum/\d+/\d+_\d+\.html$", href):
+                    range_links.append(urljoin(toc_url, href))
+
+            chapter_links = []
+            for range_url in range_links:
+                await asyncio.sleep(config.request_delay_seconds)
+                range_soup = await fetch(range_url)
+                for a in range_soup.find_all("a", href=True):
+                    href = a["href"]
+                    if re.search(r"/read/\d+_\d+\.html$", href):
+                        chapter_links.append(urljoin(range_url, href))
+            return chapter_links
+
+        if domain == "ttkan.co":
+            # All chapters listed on one page as links to /novel/pagea/{slug}_{number}.html
+            chapter_links = []
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if re.search(r"/novel/pagea/.+_\d+\.html$", href):
+                    chapter_links.append(urljoin(toc_url, href))
+            return chapter_links
+
+        if domain == "piaotia.com":
+            # Chapter list at /html/{group}/{book_id}/ has all chapters as
+            # bare relative links like "3356131.html" (numeric IDs).
+            chapter_links = []
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if re.match(r"\d+\.html$", href):
+                    chapter_links.append(urljoin(toc_url, href))
+            return chapter_links
 
     raise ScrapingError(f"TOC parsing not implemented for {domain}")

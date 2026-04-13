@@ -62,9 +62,24 @@ document.getElementById("btn-back-library").addEventListener("click", () => {
 
 async function loadNovels() {
     try {
-        const res = await fetch(`${API_BASE}/novels`);
-        if (!res.ok) return;
-        novels = await res.json();
+        const [novelsRes, jobsRes] = await Promise.all([
+            fetch(`${API_BASE}/novels`),
+            fetch(`${API_BASE}/jobs`),
+        ]);
+        if (!novelsRes.ok) return;
+        novels = await novelsRes.json();
+
+        // Tag novels that have interrupted jobs
+        if (jobsRes.ok) {
+            const allJobs = await jobsRes.json();
+            const interruptedNovelIds = new Set(
+                allJobs.filter((j) => j.status === "interrupted").map((j) => j.novel_id),
+            );
+            for (const novel of novels) {
+                novel._hasInterruptedJob = interruptedNovelIds.has(novel.id);
+            }
+        }
+
         renderNovelList();
     } catch (e) {
         console.error("Failed to load novels:", e);
@@ -94,6 +109,11 @@ function renderNovelList() {
             statusText = `${totalCount} chapters`;
         } else if (novel.status === "failed") {
             statusText = "Failed";
+        }
+
+        // Check if this novel has interrupted jobs (from server restart)
+        if (novel._hasInterruptedJob) {
+            statusText += " — interrupted, tap to resume";
         }
 
         card.innerHTML =
@@ -138,7 +158,9 @@ let jobPollTimer = null;
 
 async function openNovel(novel) {
     currentNovel = novel;
-    chaptersTitle.textContent = novel.title;
+    const titleLink = document.getElementById("chapters-title-link");
+    titleLink.textContent = novel.title;
+    titleLink.href = novel.source_url || "#";
     showView("chapters-view");
     await Promise.all([loadChapters(novel.id), loadNovelJobs(novel.id)]);
     startJobPolling();
@@ -163,19 +185,105 @@ function stopJobPolling() {
 
 document.getElementById("btn-check-updates").addEventListener("click", async () => {
     if (!currentNovel) return;
+    const btn = document.getElementById("btn-check-updates");
+    btn.disabled = true;
+    btn.textContent = "...";
     try {
-        const res = await fetch(`${API_BASE}/novels/${currentNovel.id}/update`, {
+        const res = await fetch(`${API_BASE}/novels/${currentNovel.id}/check-updates`, {
             method: "POST",
         });
         if (!res.ok) {
             const err = await res.json();
             alert(err.detail || "Failed to check for updates");
+            btn.disabled = false;
+            btn.innerHTML = "&#x21bb;";
             return;
         }
+        const data = await res.json();
         await loadNovelJobs(currentNovel.id);
+        pollCheckJob(data.job_id);
     } catch (e) {
         console.error("Failed to check for updates:", e);
         alert("Failed to check for updates");
+        btn.disabled = false;
+        btn.innerHTML = "&#x21bb;";
+    }
+});
+
+async function pollCheckJob(jobId) {
+    const btn = document.getElementById("btn-check-updates");
+    const poll = setInterval(async () => {
+        try {
+            const res = await fetch(`${API_BASE}/jobs/${jobId}`);
+            if (!res.ok) { clearInterval(poll); btn.disabled = false; btn.innerHTML = "&#x21bb;"; return; }
+            const job = await res.json();
+
+            if (job.status === "completed") {
+                clearInterval(poll);
+                btn.disabled = false;
+                btn.innerHTML = "&#x21bb;";
+                const match = job.current_step && job.current_step.match(/Found (\d+) new chapters/);
+                const count = match ? parseInt(match[1]) : 0;
+                if (count > 0) {
+                    showProcessConfirmation(count);
+                } else {
+                    alert("No new chapters found.");
+                }
+                if (currentNovel) {
+                    await loadNovelJobs(currentNovel.id);
+                    await loadChapters(currentNovel.id);
+                }
+            } else if (job.status === "failed" || job.status === "cancelled") {
+                clearInterval(poll);
+                btn.disabled = false;
+                btn.innerHTML = "&#x21bb;";
+                if (job.status === "failed") {
+                    alert("Check failed: " + (job.error_message || "Unknown error"));
+                }
+                if (currentNovel) await loadNovelJobs(currentNovel.id);
+            }
+        } catch (e) {
+            clearInterval(poll);
+            btn.disabled = false;
+            btn.innerHTML = "&#x21bb;";
+            console.error("Poll failed:", e);
+        }
+    }, 2000);
+}
+
+function showProcessConfirmation(count) {
+    const heading = document.querySelector("#add-chapters-modal h2");
+    const label = document.querySelector("#add-chapters-modal label[for='add-chapters-count']");
+    const input = document.getElementById("add-chapters-count");
+    heading.textContent = `${count} New Chapters Available`;
+    label.textContent = "How many to process?";
+    input.placeholder = `Up to ${count}`;
+    input.value = "";
+    document.getElementById("add-chapters-start-url").value = "";
+    addChaptersModal.classList.remove("hidden");
+}
+
+// ===================== Novel Rename =====================
+
+document.getElementById("btn-rename-novel").addEventListener("click", async () => {
+    if (!currentNovel) return;
+    const newTitle = prompt("Rename novel:", currentNovel.title);
+    if (newTitle === null || newTitle.trim() === "" || newTitle.trim() === currentNovel.title) return;
+    try {
+        const res = await fetch(`${API_BASE}/novels/${currentNovel.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: newTitle.trim() }),
+        });
+        if (res.ok) {
+            currentNovel.title = newTitle.trim();
+            const titleLink = document.getElementById("chapters-title-link");
+            titleLink.textContent = newTitle.trim();
+        } else {
+            alert("Failed to rename novel");
+        }
+    } catch (e) {
+        console.error("Failed to rename novel:", e);
     }
 });
 
@@ -205,6 +313,7 @@ function renderChapterList() {
         item.className = "chapter-item";
 
         const isReady = ch.status === "audio_ready";
+        const isError = ch.status === "error";
         const isPlaying =
             currentChapter && currentChapter.chapter_number === ch.chapter_number;
 
@@ -216,14 +325,83 @@ function renderChapterList() {
         const chTitle = ch.title && ch.title !== "Untitled"
             ? ch.title
             : `Chapter ${ch.chapter_number}`;
+
+        let actionsHtml = "";
+        if (isError) {
+            actionsHtml =
+                `<button class="btn-ch-retry" title="Retry">&#x21bb;</button>` +
+                `<button class="btn-ch-delete" title="Delete">&times;</button>`;
+        } else {
+            actionsHtml =
+                `<button class="btn-ch-rename" title="Rename">&#9998;</button>` +
+                `<button class="btn-ch-delete" title="Delete">&times;</button>`;
+        }
+
         item.innerHTML =
             `<span class="chapter-number">${ch.chapter_number}</span>` +
             `<span class="chapter-title">${escapeHtml(chTitle)}</span>` +
-            `<span class="chapter-status${isPlaying ? " playing" : ""}">${isReady ? statusLabel : ch.status}</span>`;
+            `<span class="chapter-status${isPlaying ? " playing" : ""}">${isReady ? statusLabel : ch.status}</span>` +
+            `<span class="chapter-actions">${actionsHtml}</span>`;
 
+        // Rename button
+        const btnRename = item.querySelector(".btn-ch-rename");
+        if (btnRename) {
+            btnRename.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                const newTitle = prompt("Rename chapter:", ch.title || `Chapter ${ch.chapter_number}`);
+                if (newTitle === null || newTitle.trim() === "") return;
+                try {
+                    const res = await fetch(
+                        `${API_BASE}/novels/${currentNovel.id}/chapters/${ch.chapter_number}`,
+                        { method: "PATCH", headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ title: newTitle.trim() }) },
+                    );
+                    if (res.ok) { ch.title = newTitle.trim(); renderChapterList(); }
+                } catch (err) { console.error("Failed to rename chapter:", err); }
+            });
+        }
+
+        // Delete button
+        const btnDelete = item.querySelector(".btn-ch-delete");
+        if (btnDelete) {
+            btnDelete.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                if (!confirm(`Delete chapter ${ch.chapter_number}?`)) return;
+                try {
+                    const res = await fetch(
+                        `${API_BASE}/novels/${currentNovel.id}/chapters/${ch.chapter_number}`,
+                        { method: "DELETE" },
+                    );
+                    if (res.ok) { await loadChapters(currentNovel.id); }
+                    else { alert("Failed to delete chapter"); }
+                } catch (err) { console.error("Failed to delete chapter:", err); }
+            });
+        }
+
+        // Retry button (error chapters)
+        const btnRetry = item.querySelector(".btn-ch-retry");
+        if (btnRetry) {
+            btnRetry.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                try {
+                    const res = await fetch(
+                        `${API_BASE}/novels/${currentNovel.id}/chapters/${ch.chapter_number}/retry`,
+                        { method: "POST" },
+                    );
+                    if (res.ok) {
+                        const data = await res.json();
+                        await loadNovelJobs(currentNovel.id);
+                        startJobPolling();
+                        await loadChapters(currentNovel.id);
+                    } else { alert("Failed to retry chapter"); }
+                } catch (err) { console.error("Failed to retry chapter:", err); }
+            });
+        }
+
+        // Click row to play (audio_ready chapters only)
         if (isReady) {
             item.addEventListener("click", () => loadChapter(ch));
-        } else {
+        } else if (!isError) {
             item.style.opacity = "0.5";
         }
 
@@ -242,9 +420,16 @@ async function loadNovelJobs(novelId) {
         if (!res.ok) return;
         const allJobs = await res.json();
         const activeJobs = allJobs.filter(
-            (j) => j.novel_id === novelId && (j.status === "queued" || j.status === "running"),
+            (j) => j.novel_id === novelId &&
+                   (j.status === "queued" || j.status === "running" || j.status === "interrupted"),
         );
         renderJobStatus(activeJobs);
+
+        // Stop polling when there are no running/queued jobs to watch
+        const hasRunning = activeJobs.some((j) => j.status === "queued" || j.status === "running");
+        if (!hasRunning) {
+            stopJobPolling();
+        }
     } catch (e) {
         console.error("Failed to load jobs:", e);
     }
@@ -263,13 +448,27 @@ function renderJobStatus(jobs) {
         item.className = "job-item";
         const pct = Math.round(job.progress_percent || 0);
         const stepText = job.current_step || job.status;
-        item.innerHTML =
-            `<div class="job-info">` +
-            `<span class="job-step">${escapeHtml(stepText)} (${pct}%)</span>` +
-            `</div>` +
-            `<div class="job-bar"><div class="job-bar-fill" style="width:${pct}%"></div></div>` +
-            `<button class="btn-cancel-job" title="Cancel job">Cancel</button>`;
-        item.querySelector(".btn-cancel-job").addEventListener("click", () => cancelJob(job.id));
+
+        if (job.status === "interrupted") {
+            item.innerHTML =
+                `<div class="job-info">` +
+                `<span class="job-step job-interrupted">${escapeHtml(stepText)}</span>` +
+                `</div>` +
+                `<div class="job-actions-row">` +
+                `<button class="btn-resume-job" title="Resume job">Resume</button>` +
+                `<button class="btn-dismiss-job" title="Dismiss">Dismiss</button>` +
+                `</div>`;
+            item.querySelector(".btn-resume-job").addEventListener("click", () => retryJob(job.id));
+            item.querySelector(".btn-dismiss-job").addEventListener("click", () => dismissJob(job.id));
+        } else {
+            item.innerHTML =
+                `<div class="job-info">` +
+                `<span class="job-step">${escapeHtml(stepText)} (${pct}%)</span>` +
+                `</div>` +
+                `<div class="job-bar"><div class="job-bar-fill" style="width:${pct}%"></div></div>` +
+                `<button class="btn-cancel-job" title="Cancel job">Cancel</button>`;
+            item.querySelector(".btn-cancel-job").addEventListener("click", () => cancelJob(job.id));
+        }
         jobStatus.appendChild(item);
     }
 }
@@ -283,9 +482,51 @@ async function cancelJob(jobId) {
             alert(err.detail || "Failed to cancel job");
             return;
         }
-        if (currentNovel) await loadNovelJobs(currentNovel.id);
+        if (currentNovel) {
+            await loadNovelJobs(currentNovel.id);
+            await loadChapters(currentNovel.id);
+        }
     } catch (e) {
         console.error("Failed to cancel job:", e);
+    }
+}
+
+async function retryJob(jobId) {
+    try {
+        const res = await fetch(`${API_BASE}/jobs/${jobId}/retry`, { method: "POST" });
+        if (!res.ok) {
+            const err = await res.json();
+            alert(err.detail || "Failed to resume job");
+            return;
+        }
+        if (currentNovel) {
+            await loadNovelJobs(currentNovel.id);
+            await loadChapters(currentNovel.id);
+            startJobPolling();
+        }
+    } catch (e) {
+        console.error("Failed to retry job:", e);
+        alert("Failed to resume job");
+    }
+}
+
+async function dismissJob(jobId) {
+    try {
+        const res = await fetch(`${API_BASE}/jobs/${jobId}`, { method: "DELETE" });
+        if (!res.ok) {
+            // If already completed/cancelled, just reload
+            if (res.status !== 400) {
+                const err = await res.json();
+                alert(err.detail || "Failed to dismiss job");
+                return;
+            }
+        }
+        if (currentNovel) {
+            await loadNovelJobs(currentNovel.id);
+            await loadChapters(currentNovel.id);
+        }
+    } catch (e) {
+        console.error("Failed to dismiss job:", e);
     }
 }
 
@@ -689,6 +930,7 @@ document.getElementById("request-form").addEventListener("submit", async (e) => 
     e.preventDefault();
     const url = document.getElementById("novel-url").value.trim();
     const title = document.getElementById("novel-title").value.trim();
+    const startChapterUrl = document.getElementById("novel-start-url").value.trim();
     const maxChaptersVal = document.getElementById("novel-max-chapters").value.trim();
     const maxChapters = maxChaptersVal ? parseInt(maxChaptersVal) : null;
 
@@ -698,7 +940,12 @@ document.getElementById("request-form").addEventListener("submit", async (e) => 
         const res = await fetch(`${API_BASE}/novels`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ url, title: title || null, max_chapters: maxChapters }),
+            body: JSON.stringify({
+                url,
+                title: title || null,
+                max_chapters: maxChapters,
+                start_chapter_url: startChapterUrl || null,
+            }),
         });
         if (!res.ok) {
             const err = await res.json();
@@ -707,6 +954,7 @@ document.getElementById("request-form").addEventListener("submit", async (e) => 
         }
         document.getElementById("novel-url").value = "";
         document.getElementById("novel-title").value = "";
+        document.getElementById("novel-start-url").value = "";
         document.getElementById("novel-max-chapters").value = "";
         requestModal.classList.add("hidden");
         await loadNovels();
@@ -721,6 +969,11 @@ document.getElementById("request-form").addEventListener("submit", async (e) => 
 const addChaptersModal = document.getElementById("add-chapters-modal");
 
 document.getElementById("btn-add-chapters").addEventListener("click", () => {
+    // Reset modal to default state (may have been modified by check-updates flow)
+    document.querySelector("#add-chapters-modal h2").textContent = "Download More Chapters";
+    document.querySelector("#add-chapters-modal label[for='add-chapters-count']").textContent = "How many more chapters?";
+    document.getElementById("add-chapters-start-url").value = "";
+    document.getElementById("add-chapters-count").placeholder = "All remaining";
     addChaptersModal.classList.remove("hidden");
 });
 
@@ -732,6 +985,7 @@ document.getElementById("add-chapters-form").addEventListener("submit", async (e
     e.preventDefault();
     if (!currentNovel) return;
 
+    const startUrl = document.getElementById("add-chapters-start-url").value.trim();
     const countVal = document.getElementById("add-chapters-count").value.trim();
     const maxChapters = countVal ? parseInt(countVal) : null;
 
@@ -739,16 +993,21 @@ document.getElementById("add-chapters-form").addEventListener("submit", async (e
         const res = await fetch(`${API_BASE}/novels/${currentNovel.id}/add-chapters`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ max_chapters: maxChapters }),
+            body: JSON.stringify({
+                max_chapters: maxChapters,
+                start_url: startUrl || null,
+            }),
         });
         if (!res.ok) {
             const err = await res.json();
             alert(err.detail || "Failed to add chapters");
             return;
         }
+        document.getElementById("add-chapters-start-url").value = "";
         document.getElementById("add-chapters-count").value = "";
         addChaptersModal.classList.add("hidden");
         await loadNovelJobs(currentNovel.id);
+        startJobPolling();
     } catch (e) {
         console.error("Failed to add chapters:", e);
         alert("Failed to add chapters");

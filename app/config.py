@@ -27,6 +27,8 @@ class SiteProfile(BaseModel):
     toc_url_pattern: str | None = None
     chapter_url_pattern: str | None = None
     encoding: str | None = None  # Override response encoding (e.g. "gbk")
+    use_browser: bool = False  # Use Playwright headless browser instead of httpx
+    browser_wait_time: int = 5000  # Milliseconds to wait after page load for JS execution
     notes: str | None = None
 
 

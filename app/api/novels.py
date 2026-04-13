@@ -3,7 +3,7 @@ import uuid
 from fastapi import APIRouter, HTTPException
 
 from app.database import get_db
-from app.models import NovelRequest, NovelResponse, AddChaptersRequest
+from app.models import NovelRequest, NovelResponse, AddChaptersRequest, RenameRequest
 from app.config import BASE_DIR, settings
 
 router = APIRouter()
@@ -34,7 +34,11 @@ async def request_novel(request: NovelRequest):
     finally:
         await db.close()
 
-    process_novel.delay(job_id, novel_id, request.url, request.max_chapters)
+    start_url = request.start_chapter_url or request.url
+    process_novel.apply_async(
+        args=[job_id, novel_id, start_url, request.max_chapters],
+        task_id=job_id,
+    )
 
     return {"novel_id": novel_id, "job_id": job_id}
 
@@ -74,10 +78,10 @@ async def get_novel(novel_id: str):
         await db.close()
 
 
-@router.post("/{novel_id}/update", response_model=dict)
-async def update_novel(novel_id: str):
-    """Check for new chapters and process only the new ones."""
-    from app.pipeline.tasks import update_novel as update_novel_task
+@router.post("/{novel_id}/check-updates", response_model=dict)
+async def check_updates(novel_id: str):
+    """Check for new chapters (scrape only, no translation or TTS)."""
+    from app.pipeline.tasks import check_updates_task
 
     db = await get_db()
     try:
@@ -88,14 +92,14 @@ async def update_novel(novel_id: str):
         job_id = str(uuid.uuid4())
         await db.execute(
             "INSERT INTO jobs (id, novel_id, job_type, status, current_step) "
-            "VALUES (?, ?, 'update', 'queued', 'Queued — checking for new chapters')",
+            "VALUES (?, ?, 'check_updates', 'queued', 'Queued — checking for new chapters')",
             (job_id, novel_id),
         )
         await db.commit()
     finally:
         await db.close()
 
-    update_novel_task.delay(job_id, novel_id)
+    check_updates_task.apply_async(args=[job_id, novel_id], task_id=job_id)
     return {"job_id": job_id}
 
 
@@ -124,20 +128,51 @@ async def add_chapters(novel_id: str, request: AddChaptersRequest):
     finally:
         await db.close()
 
-    add_chapters_task.delay(job_id, novel_id, request.max_chapters)
+    add_chapters_task.apply_async(
+        args=[job_id, novel_id, request.max_chapters, request.start_url],
+        task_id=job_id,
+    )
     return {"job_id": job_id}
+
+
+@router.patch("/{novel_id}")
+async def rename_novel(novel_id: str, request: RenameRequest):
+    """Rename a novel."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT id FROM novels WHERE id = ?", (novel_id,))
+        if await cursor.fetchone() is None:
+            raise HTTPException(404, "Novel not found")
+        await db.execute(
+            "UPDATE novels SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (request.title, novel_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return {"status": "updated"}
 
 
 @router.delete("/{novel_id}")
 async def delete_novel(novel_id: str):
-    """Delete a novel and its audio files."""
+    """Delete a novel, cancel active jobs, and remove audio files."""
     import shutil
+    from app.pipeline.tasks import celery_app
 
     db = await get_db()
     try:
         cursor = await db.execute("SELECT id FROM novels WHERE id = ?", (novel_id,))
         if await cursor.fetchone() is None:
             raise HTTPException(404, "Novel not found")
+
+        # Revoke any active Celery tasks for this novel before deleting
+        cursor = await db.execute(
+            "SELECT id FROM jobs WHERE novel_id = ? AND status IN ('queued', 'running')",
+            (novel_id,),
+        )
+        active_jobs = await cursor.fetchall()
+        for job_row in active_jobs:
+            celery_app.control.revoke(job_row["id"], terminate=True)
 
         await db.execute("DELETE FROM chapters WHERE novel_id = ?", (novel_id,))
         await db.execute("DELETE FROM jobs WHERE novel_id = ?", (novel_id,))

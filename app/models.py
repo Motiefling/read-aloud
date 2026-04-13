@@ -11,11 +11,18 @@ class NovelRequest(BaseModel):
     title: str | None = None
     dictionary_id: str | None = None
     max_chapters: int | None = None  # None = download all
+    start_chapter_url: str | None = None  # Override: start scraping from this chapter URL
 
 
 class AddChaptersRequest(BaseModel):
     """Request to add more chapters to an existing novel."""
     max_chapters: int | None = None  # None = download all remaining
+    start_url: str | None = None  # Override: start scraping from this URL instead of last chapter
+
+
+class RenameRequest(BaseModel):
+    """Rename a novel or chapter."""
+    title: str
 
 
 class PlaybackStateUpdate(BaseModel):

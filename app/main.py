@@ -17,7 +17,43 @@ from app.api.websocket import router as websocket_router
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
     await init_db()
+    await _mark_stale_jobs_interrupted()
     yield
+
+
+async def _mark_stale_jobs_interrupted():
+    """Mark any queued/running jobs from a previous session as interrupted.
+
+    On server restart, these jobs are no longer being executed by Celery
+    (the queue was purged on startup). The user must manually retry them.
+    """
+    from app.database import get_db
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "UPDATE jobs SET status = 'interrupted', "
+            "current_step = 'Server restarted — waiting for you to resume', "
+            "updated_at = CURRENT_TIMESTAMP "
+            "WHERE status IN ('queued', 'running')"
+        )
+        if cursor.rowcount > 0:
+            # Also reset novel status so they don't show as "processing"
+            await db.execute(
+                "UPDATE novels SET status = CASE "
+                "  WHEN (SELECT COUNT(*) FROM chapters WHERE chapters.novel_id = novels.id AND chapters.status = 'audio_ready') > 0 "
+                "    THEN 'completed' "
+                "  ELSE 'pending' "
+                "END, updated_at = CURRENT_TIMESTAMP "
+                "WHERE status IN ('processing', 'scraped')"
+            )
+            await db.commit()
+        import logging
+        logging.getLogger(__name__).info(
+            "Marked %d stale jobs as interrupted on startup", cursor.rowcount
+        )
+    finally:
+        await db.close()
 
 
 app = FastAPI(

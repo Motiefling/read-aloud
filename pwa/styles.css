@@ -131,6 +131,24 @@ header button {
 
 .chapter-item .chapter-title {
     flex: 1;
+    cursor: text;
+}
+
+.chapter-item .chapter-title:hover {
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 3px;
+}
+
+#chapters-title a {
+    color: inherit;
+    text-decoration: none;
+}
+
+#chapters-title a:hover {
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 3px;
 }
 
 .chapter-item .chapter-status {
@@ -258,7 +276,8 @@ header button {
 }
 
 .modal-content input[type="url"],
-.modal-content input[type="text"] {
+.modal-content input[type="text"],
+.modal-content input[type="number"] {
     width: 100%;
     padding: 0.5rem;
     border: 1px solid var(--border);
@@ -351,6 +370,47 @@ header button {
 }
 
 .btn-cancel-job:hover {
+    background: var(--accent);
+    color: white;
+}
+
+.job-interrupted {
+    color: #f0a030;
+}
+
+.job-actions-row {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.4rem;
+}
+
+.btn-resume-job {
+    background: var(--accent);
+    border: none;
+    color: white;
+    font-size: 0.8rem;
+    padding: 0.3rem 0.75rem;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.btn-resume-job:hover {
+    background: var(--accent-hover);
+}
+
+.btn-dismiss-job {
+    background: var(--border);
+    border: none;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    padding: 0.3rem 0.75rem;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+}
+
+.btn-dismiss-job:hover {
     background: var(--accent);
     color: white;
 }
