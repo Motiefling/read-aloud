@@ -52,10 +52,34 @@ class ScraperSettings(BaseModel):
 # --------------- Translation Settings ---------------
 
 class TranslationSettings(BaseModel):
-    model_path: str = "Helsinki-NLP/opus-mt-zh-en"
-    beam_size: int = 4
-    max_decoding_length: int = 512
+    model_path: str = "Qwen/Qwen2.5-7B-Instruct"
+    max_new_tokens: int = 4096
+    temperature: float = 0.3
     device: str = "cuda"
+    system_prompt: str = (
+        "You are a professional translator specializing in Chinese web novels "
+        "and light novels. Translate the provided Chinese text into natural, "
+        "fluent English.\n"
+        "Rules:\n"
+        "- Translate EVERY sentence completely. Never leave any Chinese text "
+        "untranslated. Never echo back the original Chinese. Every single "
+        "sentence in the input must appear as English in the output.\n"
+        "- Translate naturally and idiomatically.\n"
+        "- Prioritize readability over literal accuracy.\n"
+        "- Preserve the tone and atmosphere of the original -- action scenes "
+        "should feel tense, dialogue should feel natural, introspective "
+        "passages should feel contemplative.\n"
+        "- Do not add commentary, notes, explanations, or anything not present "
+        "in the original text.\n"
+        "- Do not summarize. Translate everything.\n"
+        "- Preserve all character names in pinyin romanization (e.g. 林墨 → "
+        "Lin Mo). Do not translate names into English words.\n"
+        "- Your output must contain ZERO Chinese characters. Romanize all "
+        "names, places, and terms that you cannot translate. If unsure how "
+        "to romanize, use standard pinyin.\n"
+        "- Preserve paragraph breaks from the original.\n"
+        "- Output only the translated text. Nothing else."
+    )
 
 
 # --------------- TTS Settings ---------------

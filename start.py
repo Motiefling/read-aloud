@@ -25,15 +25,26 @@ procs = []
 APP_DIR = Path(__file__).parent / "app"
 
 
+def _kill_tree(proc):
+    """Kill a process and all its children (needed on Windows where
+    terminate() only kills the parent, leaving child processes orphaned)."""
+    import psutil
+    try:
+        parent = psutil.Process(proc.pid)
+        children = parent.children(recursive=True)
+        for child in children:
+            child.kill()
+        parent.kill()
+        psutil.wait_procs(children + [parent], timeout=5)
+    except psutil.NoSuchProcess:
+        pass
+
+
 def cleanup():
     for name, proc in reversed(procs):
         if proc.poll() is None:
             print(f"Stopping {name}...")
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            _kill_tree(proc)
 
 
 def find_redis():
@@ -92,11 +103,7 @@ def celery_reloader(get_proc, set_proc):
 
             old_proc = get_proc()
             if old_proc and old_proc.poll() is None:
-                old_proc.terminate()
-                try:
-                    old_proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    old_proc.kill()
+                _kill_tree(old_proc)
 
             new_proc = start_celery()
             set_proc(new_proc)

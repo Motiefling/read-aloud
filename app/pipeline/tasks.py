@@ -8,8 +8,10 @@ import asyncio
 import logging
 import re
 import sqlite3
+import threading
 import time
 import uuid
+from queue import Queue, Empty
 
 from celery import Celery
 
@@ -66,21 +68,155 @@ def _cleanup_incomplete_chapters(conn, novel_id: str):
     conn.commit()
 
 
+# Sentinel value to signal that the scraper thread has finished.
+_SENTINEL = object()
+
+
+def _scrape_in_thread(
+    q: Queue,
+    start_url: str,
+    novel_id: str,
+    max_chapters: int | None,
+    start_number: int,
+    cancel_check,
+):
+    """Run the async scraper in a background thread, pushing chapters to a queue.
+
+    Each scraped chapter dict is put into *q* as it arrives.
+    On completion, ``_SENTINEL`` is put.  On error, the exception is put
+    followed by ``_SENTINEL``.
+    """
+
+    async def _run():
+        from app.pipeline.scraper import scrape_novel
+
+        async def on_chapter(_chapter_number, chapter_dict):
+            q.put(chapter_dict)
+
+        try:
+            await scrape_novel(
+                start_url,
+                novel_id,
+                max_chapters=max_chapters,
+                on_chapter=on_chapter,
+                start_number=start_number,
+                cancel_check=cancel_check,
+            )
+        except Exception as exc:
+            q.put(exc)
+        finally:
+            q.put(_SENTINEL)
+
+    asyncio.run(_run())
+
+
+def _translate_and_tts_chapter(
+    conn: sqlite3.Connection,
+    chapter_id: str,
+    chapter_number: int,
+    chinese_text: str,
+    title: str | None,
+    novel_id: str,
+    translator,
+    term_dict: dict,
+    tts_engine,
+    output_dir,
+) -> bool:
+    """Run translate → TTS for a single chapter. Updates the DB rows.
+
+    Returns True if the chapter reached ``audio_ready``, False on error.
+    """
+    from app.pipeline.translator import TranslationError
+    from app.pipeline.tts import generate_chapter_audio, TTSError
+    from app.pipeline.audio_processing import get_audio_duration
+
+    # --- Translate ---
+    try:
+        translate_start = time.time()
+        english_text = translator.translate_chapter(chinese_text, term_dict)
+        title_english = (
+            translator.translate_title(title, term_dict) if title else None
+        )
+        translate_elapsed = time.time() - translate_start
+        logger.info(
+            "TIMING: Translation chapter #%d done in %.1fs (%d chars -> %d chars)",
+            chapter_number, translate_elapsed,
+            len(chinese_text), len(english_text),
+        )
+        conn.execute(
+            "UPDATE chapters SET english_text = ?, title_english = ?, "
+            "status = 'translated' WHERE id = ?",
+            (english_text, title_english, chapter_id),
+        )
+        conn.commit()
+    except TranslationError:
+        logger.exception("Translation failed for chapter %s", chapter_id)
+        conn.execute(
+            "UPDATE chapters SET status = 'error' WHERE id = ?", (chapter_id,)
+        )
+        conn.commit()
+        return False
+
+    # --- Validate translation has English content ---
+    if not re.search(r"[a-zA-Z]", english_text):
+        logger.warning(
+            "Chapter #%d has no English words after translation, skipping TTS: %r",
+            chapter_number, english_text[:80],
+        )
+        conn.execute(
+            "UPDATE chapters SET status = 'error' WHERE id = ?", (chapter_id,)
+        )
+        conn.commit()
+        return False
+
+    # --- TTS ---
+    try:
+        tts_start = time.time()
+        audio_path = generate_chapter_audio(
+            english_text=english_text,
+            tts_engine=tts_engine,
+            output_dir=output_dir,
+            novel_id=novel_id,
+            chapter_number=chapter_number,
+        )
+        relative_path = str(audio_path.relative_to(BASE_DIR))
+        duration = get_audio_duration(audio_path)
+        file_size = audio_path.stat().st_size
+        tts_elapsed = time.time() - tts_start
+        logger.info(
+            "TIMING: TTS chapter #%d done in %.1fs (%.1fs audio, %.1f MB)",
+            chapter_number, tts_elapsed, duration, file_size / 1024 / 1024,
+        )
+        conn.execute(
+            "UPDATE chapters SET audio_path = ?, audio_duration_seconds = ?, "
+            "audio_file_size_bytes = ?, status = 'audio_ready' WHERE id = ?",
+            (relative_path, duration, file_size, chapter_id),
+        )
+        conn.commit()
+        return True
+    except (TTSError, RuntimeError):
+        logger.exception("Audio generation failed for chapter %s", chapter_id)
+        conn.execute(
+            "UPDATE chapters SET status = 'error' WHERE id = ?", (chapter_id,)
+        )
+        conn.commit()
+        return False
+
+
 @celery_app.task(bind=True)
 def process_novel(self, job_id: str, novel_id: str, start_url: str, max_chapters: int | None = None):
     """
-    Master task: orchestrates the full pipeline for a novel.
+    Master task: pipelined processing for a novel.
 
-    Steps:
-    1. Scrape all chapters
-    2. For each chapter: translate
-    3. (TTS will be added later)
+    Runs scraping in a background thread while the main thread processes
+    each chapter through translate → TTS as soon as it's scraped.
+    Chapters become ``audio_ready`` (and visible in the UI) one at a time
+    instead of waiting for the entire novel to finish.
     """
     conn = sqlite3.connect(_DATABASE_PATH)
     conn.row_factory = sqlite3.Row
 
     try:
-        # Bail out if the novel was deleted while we were queued
         if not _novel_exists(conn, novel_id):
             logger.info("Novel %s no longer exists, aborting job %s", novel_id, job_id)
             _update_job(conn, job_id, status="failed",
@@ -88,208 +224,187 @@ def process_novel(self, job_id: str, novel_id: str, start_url: str, max_chapters
             return {"job_id": job_id, "status": "failed", "reason": "novel_deleted"}
 
         pipeline_start = time.time()
-        _update_job(conn, job_id, status="running", current_step="Scraping chapters")
+        _update_job(conn, job_id, status="running", current_step="Starting pipeline")
 
-        # --- Step 1: Scrape ---
-        scrape_start = time.time()
-        chapter_ids = _scrape_and_store(conn, job_id, novel_id, start_url, max_chapters=max_chapters)
-        scrape_elapsed = time.time() - scrape_start
-        logger.info(
-            "TIMING: Scraping completed in %.1fs (%d chapters, %.1fs/chapter)",
-            scrape_elapsed, len(chapter_ids),
-            scrape_elapsed / len(chapter_ids) if chapter_ids else 0,
-        )
+        # Scrape cover image and novel title (best-effort)
+        try:
+            from app.pipeline.scraper import scrape_cover_image, scrape_novel_title
+            cover_path = asyncio.run(scrape_cover_image(start_url, novel_id))
+            if cover_path:
+                conn.execute(
+                    "UPDATE novels SET cover_image_path = ? WHERE id = ?",
+                    (cover_path, novel_id),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.warning("Cover image scraping failed (non-fatal): %s", e)
 
-        if _is_job_cancelled(conn, job_id):
-            logger.info("Job %s cancelled during scraping, cleaning up", job_id)
-            _cleanup_incomplete_chapters(conn, novel_id)
-            return {"job_id": job_id, "status": "cancelled"}
+        # Auto-populate title if user left it blank
+        try:
+            row = conn.execute(
+                "SELECT title FROM novels WHERE id = ?", (novel_id,),
+            ).fetchone()
+            if row and row["title"] in ("Untitled Novel", ""):
+                chinese_title = asyncio.run(scrape_novel_title(start_url))
+                if chinese_title:
+                    from app.pipeline.translator import get_translator
+                    translator = get_translator()
+                    english_title = translator.translate_title(chinese_title)
+                    if english_title:
+                        logger.info("Auto-set novel title: %s -> %s", chinese_title, english_title)
+                        conn.execute(
+                            "UPDATE novels SET title = ? WHERE id = ?",
+                            (english_title, novel_id),
+                        )
+                        conn.commit()
+        except Exception as e:
+            logger.warning("Novel title auto-detection failed (non-fatal): %s", e)
 
-        if not chapter_ids:
-            _update_job(conn, job_id, status="completed", current_step="No chapters found")
-            return {"job_id": job_id, "status": "completed", "chapters": 0}
-
-        # --- Step 2: Translate each chapter ---
-        total = len(chapter_ids)
-        _update_job(conn, job_id, current_step=f"Translating 0/{total}")
-
-        from app.pipeline.translator import get_translator, TranslationError
+        # Load GPU models and resources up front
+        from app.pipeline.translator import get_translator
+        from app.pipeline.tts import get_tts_engine
         from app.utils.term_dictionary import load_dictionary
 
-        translate_start = time.time()
         translator = get_translator()
-        term_dict = load_dictionary(novel_id)
-
-        for i, chapter_id in enumerate(chapter_ids, 1):
-            if _is_job_cancelled(conn, job_id):
-                logger.info("Job %s cancelled during translation, cleaning up", job_id)
-                _cleanup_incomplete_chapters(conn, novel_id)
-                return {"job_id": job_id, "status": "cancelled"}
-
-            row = conn.execute(
-                "SELECT chinese_text, chapter_number FROM chapters WHERE id = ?",
-                (chapter_id,),
-            ).fetchone()
-
-            if not row or not row["chinese_text"]:
-                logger.warning("Chapter %s has no text, skipping translation", chapter_id)
-                continue
-
-            ch_start = time.time()
-            logger.info(
-                "Translating chapter %d/%d (chapter #%d, %d chars)",
-                i, total, row["chapter_number"], len(row["chinese_text"]),
-            )
-            try:
-                english_text = translator.translate_chapter(
-                    row["chinese_text"], term_dict
-                )
-                ch_elapsed = time.time() - ch_start
-                logger.info(
-                    "TIMING: Translation chapter #%d done in %.1fs (%d chars -> %d chars)",
-                    row["chapter_number"], ch_elapsed,
-                    len(row["chinese_text"]), len(english_text),
-                )
-                conn.execute(
-                    "UPDATE chapters SET english_text = ?, status = 'translated' WHERE id = ?",
-                    (english_text, chapter_id),
-                )
-                conn.execute(
-                    "UPDATE novels SET processed_chapters = ? WHERE id = ?",
-                    (i, novel_id),
-                )
-                progress = (i / total) * 100
-                _update_job(
-                    conn, job_id,
-                    current_step=f"Translated {i}/{total}",
-                    progress_percent=progress,
-                )
-            except TranslationError:
-                logger.exception("Translation failed for chapter %s", chapter_id)
-                conn.execute(
-                    "UPDATE chapters SET status = 'error' WHERE id = ?",
-                    (chapter_id,),
-                )
-                conn.commit()
-
-        translate_elapsed = time.time() - translate_start
-        logger.info(
-            "TIMING: All translation completed in %.1fs (%.1fs/chapter avg)",
-            translate_elapsed, translate_elapsed / total,
-        )
-
-        # --- Step 3: Generate audio for each chapter ---
-        _update_job(conn, job_id, current_step=f"Generating audio 0/{total}")
-
-        from app.pipeline.tts import get_tts_engine, generate_chapter_audio, TTSError
-        from app.pipeline.audio_processing import get_audio_duration
-
-        tts_start = time.time()
         tts_engine = get_tts_engine()
+        term_dict = load_dictionary(novel_id)
         output_dir = BASE_DIR / settings.server.data_dir / "novels"
 
-        for i, chapter_id in enumerate(chapter_ids, 1):
+        # Start scraper in a background thread — it pushes chapters to
+        # the queue as they are scraped, overlapping with GPU work.
+        # The cancel_check must open its own DB connection because SQLite
+        # connections cannot be shared across threads.
+        def _cancel_check_threadsafe():
+            c = sqlite3.connect(_DATABASE_PATH)
+            c.row_factory = sqlite3.Row
+            try:
+                return _is_job_cancelled(c, job_id)
+            finally:
+                c.close()
+
+        q: Queue = Queue()
+        scrape_thread = threading.Thread(
+            target=_scrape_in_thread,
+            args=(q, start_url, novel_id, max_chapters, 1,
+                  _cancel_check_threadsafe),
+            daemon=True,
+        )
+        scrape_thread.start()
+
+        scraped_count = 0
+        ready_count = 0
+
+        while True:
+            # Periodic cancellation check while waiting for the next chapter
             if _is_job_cancelled(conn, job_id):
-                logger.info("Job %s cancelled during TTS, cleaning up", job_id)
+                logger.info("Job %s cancelled, cleaning up", job_id)
                 _cleanup_incomplete_chapters(conn, novel_id)
+                scrape_thread.join(timeout=15)
                 return {"job_id": job_id, "status": "cancelled"}
 
-            row = conn.execute(
-                "SELECT english_text, chapter_number FROM chapters WHERE id = ?",
-                (chapter_id,),
-            ).fetchone()
-
-            if not row or not row["english_text"]:
-                logger.warning("Chapter %s has no English text, skipping audio", chapter_id)
-                continue
-
-            if not re.search(r"[a-zA-Z]", row["english_text"]):
-                logger.warning(
-                    "Chapter #%d has no English words after translation, skipping TTS: %r",
-                    row["chapter_number"], row["english_text"][:80],
-                )
-                conn.execute(
-                    "UPDATE chapters SET status = 'error' WHERE id = ?", (chapter_id,)
-                )
-                conn.commit()
-                continue
-
-            ch_start = time.time()
-            logger.info(
-                "Generating audio %d/%d (chapter #%d, %d chars)",
-                i, total, row["chapter_number"], len(row["english_text"]),
-            )
             try:
-                audio_path = generate_chapter_audio(
-                    english_text=row["english_text"],
-                    tts_engine=tts_engine,
-                    output_dir=output_dir,
-                    novel_id=novel_id,
-                    chapter_number=row["chapter_number"],
-                )
-                relative_path = str(audio_path.relative_to(BASE_DIR))
-                duration = get_audio_duration(audio_path)
-                file_size = audio_path.stat().st_size
-                ch_elapsed = time.time() - ch_start
-                logger.info(
-                    "TIMING: TTS chapter #%d done in %.1fs (%.1fs audio, %.1f MB)",
-                    row["chapter_number"], ch_elapsed, duration, file_size / 1024 / 1024,
-                )
+                item = q.get(timeout=5)
+            except Empty:
+                continue  # loop back to cancel check
+
+            # Scraping finished
+            if item is _SENTINEL:
+                break
+
+            # Scraping error
+            if isinstance(item, Exception):
+                if scraped_count == 0:
+                    raise item
+                logger.error("Scraping error after %d chapters: %s", scraped_count, item)
+                break
+
+            # --- Store scraped chapter in DB ---
+            ch = item
+            chapter_id = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO chapters "
+                "(id, novel_id, chapter_number, title, source_url, chinese_text, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'scraped')",
+                (chapter_id, novel_id, ch["chapter_number"], ch["title"],
+                 ch["source_url"], ch["chinese_text"]),
+            )
+            scraped_count += 1
+            conn.execute(
+                "UPDATE novels SET total_chapters = ?, status = 'processing' WHERE id = ?",
+                (scraped_count, novel_id),
+            )
+            conn.commit()
+
+            # --- Translate + TTS this chapter immediately ---
+            ch_start = time.time()
+            _update_job(
+                conn, job_id,
+                current_step=f"Processing chapter {ch['chapter_number']}",
+            )
+            logger.info(
+                "Processing chapter #%d (%d chars)",
+                ch["chapter_number"], len(ch["chinese_text"]),
+            )
+
+            success = _translate_and_tts_chapter(
+                conn, chapter_id, ch["chapter_number"],
+                ch["chinese_text"], ch["title"],
+                novel_id, translator, term_dict, tts_engine, output_dir,
+            )
+
+            if success:
+                ready_count += 1
                 conn.execute(
-                    "UPDATE chapters SET audio_path = ?, audio_duration_seconds = ?, "
-                    "audio_file_size_bytes = ?, status = 'audio_ready' WHERE id = ?",
-                    (relative_path, duration, file_size, chapter_id),
-                )
-                progress = (i / total) * 100
-                _update_job(
-                    conn, job_id,
-                    current_step=f"Audio {i}/{total}",
-                    progress_percent=progress,
-                )
-            except (TTSError, RuntimeError):
-                logger.exception("Audio generation failed for chapter %s", chapter_id)
-                conn.execute(
-                    "UPDATE chapters SET status = 'error' WHERE id = ?",
-                    (chapter_id,),
+                    "UPDATE novels SET processed_chapters = ? WHERE id = ?",
+                    (ready_count, novel_id),
                 )
                 conn.commit()
 
-        tts_elapsed = time.time() - tts_start
-        pipeline_elapsed = time.time() - pipeline_start
-        logger.info(
-            "TIMING: All TTS completed in %.1fs (%.1fs/chapter avg)",
-            tts_elapsed, tts_elapsed / total,
-        )
-        logger.info(
-            "TIMING: Full pipeline completed in %.1fs "
-            "(scrape: %.1fs, translate: %.1fs, TTS: %.1fs)",
-            pipeline_elapsed, scrape_elapsed, translate_elapsed, tts_elapsed,
-        )
+            ch_elapsed = time.time() - ch_start
+            logger.info(
+                "TIMING: Chapter #%d pipeline done in %.1fs (%s)",
+                ch["chapter_number"], ch_elapsed,
+                "ready" if success else "error",
+            )
 
-        # Mark novel as completed
+            _update_job(
+                conn, job_id,
+                current_step=f"{ready_count} chapters ready ({scraped_count} scraped)",
+                progress_percent=(ready_count / scraped_count * 100) if scraped_count else 0,
+            )
+
+        scrape_thread.join(timeout=30)
+        pipeline_elapsed = time.time() - pipeline_start
+
+        if scraped_count == 0:
+            _update_job(conn, job_id, status="completed",
+                        current_step="No chapters found", progress_percent=100)
+            return {"job_id": job_id, "status": "completed", "chapters": 0}
+
+        # Finalize
         conn.execute(
-            "UPDATE novels SET status = 'completed', processed_chapters = ? WHERE id = ?",
-            (total, novel_id),
+            "UPDATE novels SET status = 'completed', total_chapters = ?, "
+            "processed_chapters = ? WHERE id = ?",
+            (scraped_count, ready_count, novel_id),
         )
         _update_job(
             conn, job_id,
             status="completed",
-            current_step=f"Done — {total} chapters processed",
+            current_step=f"Done — {ready_count}/{scraped_count} chapters ready",
             progress_percent=100,
         )
         conn.commit()
-        logger.info("Pipeline complete for novel %s: %d chapters", novel_id, total)
-        return {"job_id": job_id, "status": "completed", "chapters": total}
+
+        logger.info(
+            "TIMING: Full pipeline completed in %.1fs — %d/%d chapters ready",
+            pipeline_elapsed, ready_count, scraped_count,
+        )
+        return {"job_id": job_id, "status": "completed", "chapters": ready_count}
 
     except Exception as e:
         logger.exception("Pipeline failed for novel %s", novel_id)
         try:
-            _update_job(
-                conn, job_id,
-                status="failed",
-                error_message=str(e),
-            )
-            # Update novel status based on what actually completed
+            _update_job(conn, job_id, status="failed", error_message=str(e))
             count = conn.execute(
                 "SELECT COUNT(*) as cnt FROM chapters "
                 "WHERE novel_id = ? AND status = 'audio_ready'",
@@ -318,6 +433,8 @@ def _scrape_and_store(
     """
     Run the async scraper and store each chapter in the DB.
     Returns list of chapter IDs in order.
+
+    Used by scrape-only tasks (not the main pipeline).
     """
     from app.pipeline.scraper import scrape_novel
 
@@ -335,27 +452,16 @@ def _scrape_and_store(
         conn.execute(
             "INSERT INTO chapters (id, novel_id, chapter_number, title, source_url, chinese_text, status) "
             "VALUES (?, ?, ?, ?, ?, ?, 'scraped')",
-            (
-                chapter_id,
-                novel_id,
-                ch["chapter_number"],
-                ch["title"],
-                ch["source_url"],
-                ch["chinese_text"],
-            ),
+            (chapter_id, novel_id, ch["chapter_number"], ch["title"],
+             ch["source_url"], ch["chinese_text"]),
         )
         chapter_ids.append(chapter_id)
 
-    # Update novel with total chapter count
     conn.execute(
         "UPDATE novels SET total_chapters = ?, status = 'scraped' WHERE id = ?",
         (len(chapters), novel_id),
     )
-    _update_job(
-        conn, job_id,
-        current_step=f"Scraped {len(chapters)} chapters",
-    )
-
+    _update_job(conn, job_id, current_step=f"Scraped {len(chapters)} chapters")
     conn.commit()
     logger.info("Stored %d scraped chapters for novel %s", len(chapters), novel_id)
     return chapter_ids
@@ -412,7 +518,7 @@ def translate_chapter_task(self, job_id: str, chapter_id: str):
     conn.row_factory = sqlite3.Row
     try:
         row = conn.execute(
-            "SELECT id, novel_id, chinese_text, chapter_number "
+            "SELECT id, novel_id, chinese_text, chapter_number, title "
             "FROM chapters WHERE id = ?",
             (chapter_id,),
         ).fetchone()
@@ -441,11 +547,14 @@ def translate_chapter_task(self, job_id: str, chapter_id: str):
             len(chinese_text),
         )
         english_text = translator.translate_chapter(chinese_text, term_dict)
+        title_english = translator.translate_title(
+            row["title"], term_dict
+        ) if row["title"] else None
 
         # Store result
         conn.execute(
-            "UPDATE chapters SET english_text = ?, status = 'translated' WHERE id = ?",
-            (english_text, chapter_id),
+            "UPDATE chapters SET english_text = ?, title_english = ?, status = 'translated' WHERE id = ?",
+            (english_text, title_english, chapter_id),
         )
         conn.execute(
             "UPDATE jobs SET current_step = ?, updated_at = CURRENT_TIMESTAMP "
@@ -664,14 +773,13 @@ def _process_chapters(self, job_id: str, novel_id: str, max_chapters: int | None
     Process chapters for an existing novel (translate + TTS).
 
     If there are already-scraped chapters in the DB (from check_updates_task),
-    processes those. Otherwise, scrapes forward from the last completed chapter
-    (or from start_url if provided).
+    processes those.  Otherwise, scrapes forward from the last completed chapter
+    (or from start_url if provided) using the pipelined producer-consumer
+    approach so chapters become ``audio_ready`` one at a time.
     """
-    from app.pipeline.scraper import scrape_novel
-    from app.pipeline.translator import get_translator, TranslationError
-    from app.pipeline.tts import get_tts_engine, generate_chapter_audio, TTSError
-    from app.pipeline.audio_processing import get_audio_duration
+    from app.pipeline.translator import get_translator
     from app.utils.term_dictionary import load_dictionary
+    from app.pipeline.tts import get_tts_engine
 
     conn = sqlite3.connect(_DATABASE_PATH)
     conn.row_factory = sqlite3.Row
@@ -686,20 +794,27 @@ def _process_chapters(self, job_id: str, novel_id: str, max_chapters: int | None
         pipeline_start = time.time()
         _update_job(conn, job_id, status="running", current_step="Preparing")
 
-        # Check for already-scraped chapters (from check_updates_task or previous run)
+        # Load GPU models up front
+        translator = get_translator()
+        tts_engine = get_tts_engine()
+        term_dict = load_dictionary(novel_id)
+        output_dir = BASE_DIR / settings.server.data_dir / "novels"
+
+        # ------------------------------------------------------------------
+        # Path A: pre-scraped chapters already in the DB
+        # ------------------------------------------------------------------
         unprocessed_rows = conn.execute(
-            "SELECT id FROM chapters "
+            "SELECT id, chapter_number, chinese_text, title, status FROM chapters "
             "WHERE novel_id = ? AND status IN ('scraped', 'translated') "
             "ORDER BY chapter_number",
             (novel_id,),
         ).fetchall()
 
         if unprocessed_rows:
-            # Process existing unprocessed chapters (no re-scraping needed)
-            new_chapter_ids = [r["id"] for r in unprocessed_rows]
+            chapters_to_process = list(unprocessed_rows)
             if max_chapters:
-                new_chapter_ids = new_chapter_ids[:max_chapters]
-            total_new = len(new_chapter_ids)
+                chapters_to_process = chapters_to_process[:max_chapters]
+            total_new = len(chapters_to_process)
             logger.info("Found %d pre-scraped chapters to process", total_new)
             _update_job(conn, job_id, current_step=f"Processing {total_new} chapters")
             conn.execute(
@@ -707,316 +822,174 @@ def _process_chapters(self, job_id: str, novel_id: str, max_chapters: int | None
                 (novel_id,),
             )
             conn.commit()
-        else:
-            # Need to scrape new chapters first
-            _update_job(conn, job_id, current_step="Scraping new chapters")
 
-            if start_url:
-                # User provided an explicit starting chapter URL
-                # Figure out what chapter number to start from
-                existing_max = conn.execute(
-                    "SELECT COALESCE(MAX(chapter_number), 0) as mx FROM chapters WHERE novel_id = ?",
-                    (novel_id,),
-                ).fetchone()["mx"]
-                start_number = existing_max + 1
-
-                _update_job(conn, job_id, current_step="Scraping from provided URL")
-                scrape_start = time.time()
-                all_chapters = asyncio.run(scrape_novel(
-                    start_url, novel_id,
-                    max_chapters=max_chapters,
-                    start_number=start_number,
-                    cancel_check=lambda: _is_job_cancelled(conn, job_id),
-                ))
-                scrape_elapsed = time.time() - scrape_start
-
+            ready_count = 0
+            for i, row in enumerate(chapters_to_process, 1):
                 if _is_job_cancelled(conn, job_id):
-                    logger.info("Job %s cancelled during add-chapters scrape", job_id)
+                    logger.info("Job %s cancelled during processing", job_id)
                     _cleanup_incomplete_chapters(conn, novel_id)
                     return {"job_id": job_id, "status": "cancelled"}
 
-                if not all_chapters:
-                    _update_job(conn, job_id, status="completed",
-                                current_step="No chapters found", progress_percent=100)
-                    return {"job_id": job_id, "status": "completed", "new_chapters": 0}
+                if not row["chinese_text"]:
+                    continue
+                if row["status"] == "audio_ready":
+                    ready_count += 1
+                    continue
 
-                new_chapter_ids = []
-                for ch in all_chapters:
-                    chapter_id = str(uuid.uuid4())
-                    conn.execute(
-                        "INSERT OR IGNORE INTO chapters "
-                        "(id, novel_id, chapter_number, title, source_url, chinese_text, status) "
-                        "VALUES (?, ?, ?, ?, ?, ?, 'scraped')",
-                        (chapter_id, novel_id, ch["chapter_number"], ch["title"],
-                         ch["source_url"], ch["chinese_text"]),
-                    )
-                    new_chapter_ids.append(chapter_id)
-
-                total_now = conn.execute(
-                    "SELECT COUNT(*) as cnt FROM chapters WHERE novel_id = ?",
-                    (novel_id,),
-                ).fetchone()["cnt"]
-                conn.execute(
-                    "UPDATE novels SET total_chapters = ?, status = 'processing', "
-                    "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (total_now, novel_id),
-                )
-                conn.commit()
-                total_new = len(new_chapter_ids)
-                logger.info("Scraped %d chapters from provided URL in %.1fs",
-                            total_new, scrape_elapsed)
-
-            # Find last completed chapter to scrape from
-            elif (last_row := conn.execute(
-                "SELECT chapter_number, source_url FROM chapters "
-                "WHERE novel_id = ? AND status = 'audio_ready' "
-                "ORDER BY chapter_number DESC LIMIT 1",
-                (novel_id,),
-            ).fetchone()) is None:
-                # No completed chapters — fall back to the novel's original
-                # source URL (e.g. after a previous job was cancelled before
-                # any chapters finished processing).
-                novel_row = conn.execute(
-                    "SELECT source_url FROM novels WHERE id = ?",
-                    (novel_id,),
-                ).fetchone()
-                if novel_row is None or not novel_row["source_url"]:
-                    _update_job(conn, job_id, status="failed",
-                                error_message="No existing chapters and no source URL to scrape from")
-                    return {"job_id": job_id, "status": "failed"}
-
-                _update_job(conn, job_id, current_step="Scraping from beginning")
-                scrape_start = time.time()
-                all_chapters = asyncio.run(scrape_novel(
-                    novel_row["source_url"], novel_id,
-                    max_chapters=max_chapters,
-                    cancel_check=lambda: _is_job_cancelled(conn, job_id),
-                ))
-                scrape_elapsed = time.time() - scrape_start
-
-                if _is_job_cancelled(conn, job_id):
-                    logger.info("Job %s cancelled during add-chapters scrape", job_id)
-                    _cleanup_incomplete_chapters(conn, novel_id)
-                    return {"job_id": job_id, "status": "cancelled"}
-
-                if not all_chapters:
-                    _update_job(conn, job_id, status="completed",
-                                current_step="No chapters found", progress_percent=100)
-                    return {"job_id": job_id, "status": "completed", "new_chapters": 0}
-
-                new_chapter_ids = []
-                for ch in all_chapters:
-                    chapter_id = str(uuid.uuid4())
-                    conn.execute(
-                        "INSERT OR IGNORE INTO chapters "
-                        "(id, novel_id, chapter_number, title, source_url, chinese_text, status) "
-                        "VALUES (?, ?, ?, ?, ?, ?, 'scraped')",
-                        (chapter_id, novel_id, ch["chapter_number"], ch["title"],
-                         ch["source_url"], ch["chinese_text"]),
-                    )
-                    new_chapter_ids.append(chapter_id)
-
-                total_now = len(all_chapters)
-                conn.execute(
-                    "UPDATE novels SET total_chapters = ?, status = 'processing', "
-                    "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (total_now, novel_id),
-                )
-                conn.commit()
-                total_new = len(new_chapter_ids)
-                logger.info("Scraped %d chapters from beginning in %.1fs",
-                            total_new, scrape_elapsed)
-                # Fall through to translate + TTS below
-
-            else:
-                last_chapter_num = last_row["chapter_number"]
-                last_url = last_row["source_url"]
-                logger.info("Scraping from chapter #%d (%s)", last_chapter_num, last_url)
-
-                scrape_limit = max_chapters + 1 if max_chapters else None
-                scrape_start = time.time()
-                all_chapters = asyncio.run(scrape_novel(
-                    last_url, novel_id, max_chapters=scrape_limit,
-                    start_number=last_chapter_num,
-                    cancel_check=lambda: _is_job_cancelled(conn, job_id),
-                ))
-                scrape_elapsed = time.time() - scrape_start
-
-                if _is_job_cancelled(conn, job_id):
-                    logger.info("Job %s cancelled during add-chapters scrape", job_id)
-                    _cleanup_incomplete_chapters(conn, novel_id)
-                    return {"job_id": job_id, "status": "cancelled"}
-
-                new_chapters = [ch for ch in all_chapters if ch["chapter_number"] > last_chapter_num]
-
-                if not new_chapters:
-                    _update_job(conn, job_id, status="completed",
-                                current_step="No new chapters found", progress_percent=100)
-                    return {"job_id": job_id, "status": "completed", "new_chapters": 0}
-
-                logger.info("Found %d new chapters in %.1fs", len(new_chapters), scrape_elapsed)
-
-                new_chapter_ids = []
-                for ch in new_chapters:
-                    chapter_id = str(uuid.uuid4())
-                    conn.execute(
-                        "INSERT OR IGNORE INTO chapters "
-                        "(id, novel_id, chapter_number, title, source_url, chinese_text, status) "
-                        "VALUES (?, ?, ?, ?, ?, ?, 'scraped')",
-                        (chapter_id, novel_id, ch["chapter_number"], ch["title"],
-                         ch["source_url"], ch["chinese_text"]),
-                    )
-                    new_chapter_ids.append(chapter_id)
-
-                total_now = conn.execute(
-                    "SELECT COUNT(*) as cnt FROM chapters WHERE novel_id = ?",
-                    (novel_id,),
-                ).fetchone()["cnt"]
-                conn.execute(
-                    "UPDATE novels SET total_chapters = ?, status = 'processing', "
-                    "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (total_now, novel_id),
-                )
-                conn.commit()
-                total_new = len(new_chapter_ids)
-
-        # --- Translate ---
-        _update_job(conn, job_id, current_step=f"Translating 0/{total_new}")
-        translate_start = time.time()
-        translator = get_translator()
-        term_dict = load_dictionary(novel_id)
-
-        for i, chapter_id in enumerate(new_chapter_ids, 1):
-            if _is_job_cancelled(conn, job_id):
-                logger.info("Job %s cancelled during translation", job_id)
-                _cleanup_incomplete_chapters(conn, novel_id)
-                return {"job_id": job_id, "status": "cancelled"}
-
-            row = conn.execute(
-                "SELECT chinese_text, chapter_number, status FROM chapters WHERE id = ?",
-                (chapter_id,),
-            ).fetchone()
-            if not row or not row["chinese_text"]:
-                continue
-            if row["status"] in ("translated", "audio_ready"):
-                continue  # Already translated
-
-            ch_start = time.time()
-            try:
-                english_text = translator.translate_chapter(
-                    row["chinese_text"], term_dict)
-                ch_elapsed = time.time() - ch_start
-                logger.info("TIMING: Translation chapter #%d done in %.1fs",
-                            row["chapter_number"], ch_elapsed)
-                conn.execute(
-                    "UPDATE chapters SET english_text = ?, status = 'translated' WHERE id = ?",
-                    (english_text, chapter_id),
-                )
+                ch_start = time.time()
                 _update_job(conn, job_id,
-                            current_step=f"Translated {i}/{total_new}",
-                            progress_percent=(i / total_new) * 50)
-            except TranslationError:
-                logger.exception("Translation failed for chapter %s", chapter_id)
-                conn.execute(
-                    "UPDATE chapters SET status = 'error' WHERE id = ?",
-                    (chapter_id,),
+                            current_step=f"Processing chapter {row['chapter_number']} ({i}/{total_new})",
+                            progress_percent=(i / total_new) * 100)
+
+                success = _translate_and_tts_chapter(
+                    conn, row["id"], row["chapter_number"],
+                    row["chinese_text"], row["title"],
+                    novel_id, translator, term_dict, tts_engine, output_dir,
                 )
-            conn.commit()
+                if success:
+                    ready_count += 1
+                    conn.execute(
+                        "UPDATE novels SET processed_chapters = ? WHERE id = ?",
+                        (ready_count, novel_id),
+                    )
+                    conn.commit()
 
-        translate_elapsed = time.time() - translate_start
+                logger.info("TIMING: Chapter #%d done in %.1fs (%s)",
+                            row["chapter_number"], time.time() - ch_start,
+                            "ready" if success else "error")
 
-        # --- TTS ---
-        tts_start = time.time()
-        tts_engine = get_tts_engine()
-        output_dir = BASE_DIR / settings.server.data_dir / "novels"
+            # Finalize
+            return _finalize_process_chapters(
+                conn, job_id, novel_id, total_new, pipeline_start)
 
-        for i, chapter_id in enumerate(new_chapter_ids, 1):
-            if _is_job_cancelled(conn, job_id):
-                logger.info("Job %s cancelled during TTS", job_id)
-                _cleanup_incomplete_chapters(conn, novel_id)
-                return {"job_id": job_id, "status": "cancelled"}
+        # ------------------------------------------------------------------
+        # Path B: need to scrape first — use pipelined producer-consumer
+        # ------------------------------------------------------------------
+        _update_job(conn, job_id, current_step="Scraping new chapters")
 
-            row = conn.execute(
-                "SELECT english_text, chapter_number, status FROM chapters WHERE id = ?",
-                (chapter_id,),
-            ).fetchone()
-            if not row or not row["english_text"]:
-                continue
-            if row["status"] == "audio_ready":
-                continue  # Already has audio
-
-            # Skip chapters whose translated text contains no real words
-            if not re.search(r"[a-zA-Z]", row["english_text"]):
-                logger.warning(
-                    "Chapter #%d has no English words after translation, skipping TTS: %r",
-                    row["chapter_number"], row["english_text"][:80],
-                )
-                conn.execute(
-                    "UPDATE chapters SET status = 'error' WHERE id = ?", (chapter_id,)
-                )
-                conn.commit()
-                continue
-
-            ch_start = time.time()
-            try:
-                audio_path = generate_chapter_audio(
-                    english_text=row["english_text"],
-                    tts_engine=tts_engine,
-                    output_dir=output_dir,
-                    novel_id=novel_id,
-                    chapter_number=row["chapter_number"],
-                )
-                relative_path = str(audio_path.relative_to(BASE_DIR))
-                duration = get_audio_duration(audio_path)
-                file_size = audio_path.stat().st_size
-                ch_elapsed = time.time() - ch_start
-                logger.info("TIMING: TTS chapter #%d done in %.1fs (%.1fs audio)",
-                            row["chapter_number"], ch_elapsed, duration)
-                conn.execute(
-                    "UPDATE chapters SET audio_path = ?, audio_duration_seconds = ?, "
-                    "audio_file_size_bytes = ?, status = 'audio_ready' WHERE id = ?",
-                    (relative_path, duration, file_size, chapter_id),
-                )
-                _update_job(conn, job_id,
-                            current_step=f"Audio {i}/{total_new}",
-                            progress_percent=50 + (i / total_new) * 50)
-            except (TTSError, RuntimeError):
-                logger.exception("Audio failed for chapter %s", chapter_id)
-                conn.execute(
-                    "UPDATE chapters SET status = 'error' WHERE id = ?",
-                    (chapter_id,),
-                )
-            conn.commit()
-
-        tts_elapsed = time.time() - tts_start
-        pipeline_elapsed = time.time() - pipeline_start
-
-        # Update novel with final counts
-        completed_count = conn.execute(
-            "SELECT COUNT(*) as cnt FROM chapters "
-            "WHERE novel_id = ? AND status = 'audio_ready'",
-            (novel_id,),
-        ).fetchone()["cnt"]
-        total_chapters = conn.execute(
-            "SELECT COUNT(*) as cnt FROM chapters WHERE novel_id = ?",
-            (novel_id,),
-        ).fetchone()["cnt"]
+        # Determine the scrape start URL and chapter number
+        scrape_url, start_number, filter_after = _resolve_scrape_start(
+            conn, job_id, novel_id, start_url, max_chapters,
+        )
+        if scrape_url is None:
+            # _resolve_scrape_start already updated the job status
+            return {"job_id": job_id, "status": conn.execute(
+                "SELECT status FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()["status"]}
 
         conn.execute(
-            "UPDATE novels SET status = 'completed', total_chapters = ?, "
-            "processed_chapters = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (total_chapters, completed_count, novel_id),
+            "UPDATE novels SET status = 'processing', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (novel_id,),
         )
-        _update_job(conn, job_id, status="completed",
-                    current_step=f"Done — {total_new} chapters processed",
-                    progress_percent=100)
         conn.commit()
 
-        logger.info(
-            "TIMING: Processing completed in %.1fs (translate: %.1fs, TTS: %.1fs) — %d chapters",
-            pipeline_elapsed, translate_elapsed, tts_elapsed, total_new,
+        # Start scraper in background thread
+        # When scraping from the last completed chapter (filter_after is set),
+        # we scrape one extra because the starting chapter is already in the DB.
+        scrape_limit = max_chapters
+        if scrape_limit and filter_after is not None:
+            scrape_limit += 1
+
+        def _cancel_check_threadsafe():
+            c = sqlite3.connect(_DATABASE_PATH)
+            c.row_factory = sqlite3.Row
+            try:
+                return _is_job_cancelled(c, job_id)
+            finally:
+                c.close()
+
+        q: Queue = Queue()
+        scrape_thread = threading.Thread(
+            target=_scrape_in_thread,
+            args=(q, scrape_url, novel_id, scrape_limit, start_number,
+                  _cancel_check_threadsafe),
+            daemon=True,
         )
-        return {"job_id": job_id, "status": "completed", "new_chapters": total_new}
+        scrape_thread.start()
+
+        scraped_count = 0
+        ready_count = 0
+
+        while True:
+            if _is_job_cancelled(conn, job_id):
+                logger.info("Job %s cancelled, cleaning up", job_id)
+                _cleanup_incomplete_chapters(conn, novel_id)
+                scrape_thread.join(timeout=15)
+                return {"job_id": job_id, "status": "cancelled"}
+
+            try:
+                item = q.get(timeout=5)
+            except Empty:
+                continue
+
+            if item is _SENTINEL:
+                break
+            if isinstance(item, Exception):
+                if scraped_count == 0:
+                    raise item
+                logger.error("Scraping error after %d chapters: %s", scraped_count, item)
+                break
+
+            ch = item
+
+            # Filter out the starting chapter when scraping from last completed
+            if filter_after is not None and ch["chapter_number"] <= filter_after:
+                continue
+
+            # Store scraped chapter
+            chapter_id = str(uuid.uuid4())
+            conn.execute(
+                "INSERT OR IGNORE INTO chapters "
+                "(id, novel_id, chapter_number, title, source_url, chinese_text, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'scraped')",
+                (chapter_id, novel_id, ch["chapter_number"], ch["title"],
+                 ch["source_url"], ch["chinese_text"]),
+            )
+            scraped_count += 1
+            total_now = conn.execute(
+                "SELECT COUNT(*) as cnt FROM chapters WHERE novel_id = ?",
+                (novel_id,),
+            ).fetchone()["cnt"]
+            conn.execute(
+                "UPDATE novels SET total_chapters = ? WHERE id = ?",
+                (total_now, novel_id),
+            )
+            conn.commit()
+
+            # Process through translate + TTS immediately
+            ch_start = time.time()
+            _update_job(conn, job_id,
+                        current_step=f"Processing chapter {ch['chapter_number']}")
+
+            success = _translate_and_tts_chapter(
+                conn, chapter_id, ch["chapter_number"],
+                ch["chinese_text"], ch["title"],
+                novel_id, translator, term_dict, tts_engine, output_dir,
+            )
+            if success:
+                ready_count += 1
+                conn.execute(
+                    "UPDATE novels SET processed_chapters = ? WHERE id = ?",
+                    (ready_count, novel_id),
+                )
+                conn.commit()
+
+            logger.info("TIMING: Chapter #%d done in %.1fs (%s)",
+                        ch["chapter_number"], time.time() - ch_start,
+                        "ready" if success else "error")
+            _update_job(conn, job_id,
+                        current_step=f"{ready_count} chapters ready ({scraped_count} scraped)",
+                        progress_percent=(ready_count / scraped_count * 100) if scraped_count else 0)
+
+        scrape_thread.join(timeout=30)
+
+        if scraped_count == 0:
+            _update_job(conn, job_id, status="completed",
+                        current_step="No new chapters found", progress_percent=100)
+            return {"job_id": job_id, "status": "completed", "new_chapters": 0}
+
+        return _finalize_process_chapters(
+            conn, job_id, novel_id, scraped_count, pipeline_start)
 
     except Exception as e:
         logger.exception("Processing failed for novel %s", novel_id)
@@ -1038,3 +1011,75 @@ def _process_chapters(self, job_id: str, novel_id: str, max_chapters: int | None
         raise
     finally:
         conn.close()
+
+
+def _resolve_scrape_start(conn, job_id, novel_id, start_url, max_chapters):
+    """Determine where to start scraping for _process_chapters.
+
+    Returns ``(scrape_url, start_number, filter_after)`` where
+    *filter_after* is a chapter number to skip (the starting chapter that
+    is already in the DB), or ``None`` if no filtering is needed.
+
+    Returns ``(None, ...)`` if there is nothing to scrape (job is updated).
+    """
+    if start_url:
+        existing_max = conn.execute(
+            "SELECT COALESCE(MAX(chapter_number), 0) as mx FROM chapters WHERE novel_id = ?",
+            (novel_id,),
+        ).fetchone()["mx"]
+        return start_url, existing_max + 1, None
+
+    last_row = conn.execute(
+        "SELECT chapter_number, source_url FROM chapters "
+        "WHERE novel_id = ? AND status = 'audio_ready' "
+        "ORDER BY chapter_number DESC LIMIT 1",
+        (novel_id,),
+    ).fetchone()
+
+    if last_row is None:
+        # No completed chapters — fall back to novel's original source URL
+        novel_row = conn.execute(
+            "SELECT source_url FROM novels WHERE id = ?",
+            (novel_id,),
+        ).fetchone()
+        if novel_row is None or not novel_row["source_url"]:
+            _update_job(conn, job_id, status="failed",
+                        error_message="No existing chapters and no source URL to scrape from")
+            return None, 0, None
+        return novel_row["source_url"], 1, None
+
+    # Scrape forward from last completed chapter (include it so the
+    # scraper can follow its next-page link, then filter it out).
+    last_num = last_row["chapter_number"]
+    scrape_limit = max_chapters + 1 if max_chapters else None
+    return last_row["source_url"], last_num, last_num
+
+
+def _finalize_process_chapters(conn, job_id, novel_id, total_new, pipeline_start):
+    """Update novel and job to 'completed' after _process_chapters finishes."""
+    completed_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM chapters "
+        "WHERE novel_id = ? AND status = 'audio_ready'",
+        (novel_id,),
+    ).fetchone()["cnt"]
+    total_chapters = conn.execute(
+        "SELECT COUNT(*) as cnt FROM chapters WHERE novel_id = ?",
+        (novel_id,),
+    ).fetchone()["cnt"]
+
+    conn.execute(
+        "UPDATE novels SET status = 'completed', total_chapters = ?, "
+        "processed_chapters = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (total_chapters, completed_count, novel_id),
+    )
+    _update_job(conn, job_id, status="completed",
+                current_step=f"Done — {total_new} chapters processed",
+                progress_percent=100)
+    conn.commit()
+
+    pipeline_elapsed = time.time() - pipeline_start
+    logger.info(
+        "TIMING: Processing completed in %.1fs — %d chapters",
+        pipeline_elapsed, total_new,
+    )
+    return {"job_id": job_id, "status": "completed", "new_chapters": total_new}

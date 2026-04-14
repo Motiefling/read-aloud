@@ -19,7 +19,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup, NavigableString
 
-from app.config import settings, SiteProfile, ScraperSettings
+from app.config import settings, SiteProfile, ScraperSettings, BASE_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -145,12 +145,14 @@ def _extract_title(soup: BeautifulSoup, domain: str, profile: SiteProfile) -> st
     # --- Site-specific fallbacks ---
 
     if domain == "funs.me":
-        # On funs.me, the title is a bare text node between the book-title <a>
-        # and the font-size toggle (#enlarge_font_size). Look for text matching
-        # the chapter heading pattern (e.g. "第86章 ...").
+        # On funs.me, the title is a bare text node in a <font> tag between the
+        # book-title <a> and the content div. It matches the chapter heading
+        # pattern "第N章 ..." where N can be Arabic digits (第86章) or Chinese
+        # numerals (第一章, 第二十三章).
         # Exclude matches inside <title>, <script>, and #ChSize.
+        _ch_num = r"[\d一二三四五六七八九十百千零〇]+"
         exclude_tags = {"title", "script", "style"}
-        for text_node in soup.find_all(string=re.compile(r"第\d+章")):
+        for text_node in soup.find_all(string=re.compile(rf"第{_ch_num}章")):
             parent = text_node.parent
             if parent is None:
                 continue
@@ -434,6 +436,114 @@ async def scrape_novel(
 
     logger.info("Finished scraping %d chapters for novel %s.", len(chapters), novel_id)
     return chapters
+
+
+async def scrape_novel_title(source_url: str) -> str | None:
+    """
+    Scrape the novel title from a book/TOC page.
+
+    Extracts from the <title> tag and strips site names and metadata.
+    Returns the raw Chinese title, or None if not found.
+    """
+    domain, profile = get_site_profile(source_url)
+    config = settings.scraper
+
+    try:
+        async with _create_fetcher(profile, config) as fetch:
+            soup = await fetch(source_url)
+
+            # Try og:title first
+            og = soup.find("meta", property="og:title")
+            if og and og.get("content"):
+                title = og["content"].strip()
+            elif soup.title and soup.title.string:
+                title = soup.title.string.strip()
+            else:
+                return None
+
+            # Clean up: strip site names and common suffixes.
+            # Most sites use " - SiteName" or "《title》 metadata - site"
+            # Strip 《》 brackets
+            title = re.sub(r"[《》]", "", title)
+            # Take everything before the first " - " or " – " separator
+            title = re.split(r"\s*[-–|]\s*", title)[0].strip()
+            # Strip common suffixes like "最新章節" etc.
+            title = re.sub(r"\s*最新.*$", "", title).strip()
+
+            if title:
+                logger.info("Scraped novel title: %s", title)
+                return title
+            return None
+
+    except Exception as e:
+        logger.warning("Failed to scrape novel title: %s", e)
+        return None
+
+
+async def scrape_cover_image(source_url: str, novel_id: str) -> str | None:
+    """
+    Scrape the cover image from a novel's book/TOC page and save it locally.
+
+    Tries og:image meta tag first, then site-specific fallbacks.
+    Returns the relative path to the saved image, or None if not found.
+    """
+    domain, profile = get_site_profile(source_url)
+    config = settings.scraper
+
+    try:
+        async with _create_fetcher(profile, config) as fetch:
+            soup = await fetch(source_url)
+
+            image_url = None
+
+            # Site-specific cover selectors
+            if domain == "funs.me":
+                # Cover is at /bimg/{book_id}.jpg
+                m = re.search(r"/book/(\d+)\.html", source_url)
+                if m:
+                    image_url = urljoin(source_url, f"/bimg/{m.group(1)}.jpg")
+
+            # Generic fallback: og:image meta tag (works for ttkan.co and many others)
+            if not image_url:
+                og = soup.find("meta", property="og:image")
+                if og and og.get("content"):
+                    image_url = urljoin(source_url, og["content"])
+
+            if not image_url:
+                logger.info("No cover image found for %s", source_url)
+                return None
+
+            # Download the image
+            logger.info("Downloading cover image: %s", image_url)
+            async with httpx.AsyncClient(
+                headers={"User-Agent": config.user_agent},
+                follow_redirects=True,
+                timeout=30.0,
+            ) as client:
+                resp = await client.get(image_url)
+                resp.raise_for_status()
+
+            # Determine file extension from content type or URL
+            content_type = resp.headers.get("content-type", "")
+            if "png" in content_type:
+                ext = ".png"
+            elif "webp" in content_type:
+                ext = ".webp"
+            else:
+                ext = ".jpg"
+
+            cover_dir = BASE_DIR / settings.server.data_dir / "novels" / novel_id
+            cover_dir.mkdir(parents=True, exist_ok=True)
+            cover_path = cover_dir / f"cover{ext}"
+            cover_path.write_bytes(resp.content)
+
+            relative_path = str(cover_path.relative_to(BASE_DIR)).replace("\\", "/")
+            logger.info("Saved cover image: %s", relative_path)
+            return relative_path
+
+    except Exception as e:
+        logger.warning("Failed to scrape cover image: %s", e)
+        return None
 
 
 async def scrape_table_of_contents(toc_url: str) -> list[str]:

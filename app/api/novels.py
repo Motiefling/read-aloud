@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 
 from app.database import get_db
 from app.models import NovelRequest, NovelResponse, AddChaptersRequest, RenameRequest
@@ -49,7 +50,7 @@ async def list_novels():
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, title, source_url, dictionary_id, total_chapters, "
+            "SELECT id, title, source_url, dictionary_id, cover_image_path, total_chapters, "
             "processed_chapters, status, created_at, updated_at "
             "FROM novels ORDER BY created_at DESC"
         )
@@ -65,7 +66,7 @@ async def get_novel(novel_id: str):
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, title, source_url, dictionary_id, total_chapters, "
+            "SELECT id, title, source_url, dictionary_id, cover_image_path, total_chapters, "
             "processed_chapters, status, created_at, updated_at "
             "FROM novels WHERE id = ?",
             (novel_id,),
@@ -151,6 +152,35 @@ async def rename_novel(novel_id: str, request: RenameRequest):
     finally:
         await db.close()
     return {"status": "updated"}
+
+
+@router.get("/{novel_id}/cover")
+async def get_cover_image(novel_id: str):
+    """Serve the cover image for a novel."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT cover_image_path FROM novels WHERE id = ?", (novel_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise HTTPException(404, "Novel not found")
+        if not row["cover_image_path"]:
+            raise HTTPException(404, "No cover image available")
+    finally:
+        await db.close()
+
+    cover_path = BASE_DIR / row["cover_image_path"]
+    if not cover_path.exists():
+        raise HTTPException(404, "Cover image file not found on disk")
+
+    media_type = "image/jpeg"
+    if cover_path.suffix == ".png":
+        media_type = "image/png"
+    elif cover_path.suffix == ".webp":
+        media_type = "image/webp"
+
+    return FileResponse(str(cover_path), media_type=media_type)
 
 
 @router.delete("/{novel_id}")

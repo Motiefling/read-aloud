@@ -45,6 +45,7 @@ class NovelResponse(BaseModel):
     title: str
     source_url: str
     dictionary_id: str | None = None
+    cover_image_path: str | None = None
     total_chapters: int = 0
     processed_chapters: int = 0
     status: str = "pending"
@@ -57,6 +58,7 @@ class ChapterResponse(BaseModel):
     novel_id: str
     chapter_number: int
     title: str | None = None
+    title_english: str | None = None
     status: str = "pending"
     audio_duration_seconds: float | None = None
     audio_file_size_bytes: int | None = None

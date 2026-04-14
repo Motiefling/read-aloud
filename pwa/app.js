@@ -19,6 +19,7 @@ let chapters = [];
 let currentChapter = null;
 let ws = null;
 let playbackSaveTimer = null;
+let listenedChapters = loadListenedChapters(); // { novelId: [chapterNumbers] }
 
 // ===================== DOM Elements =====================
 
@@ -163,15 +164,36 @@ async function openNovel(novel) {
     titleLink.href = novel.source_url || "#";
     showView("chapters-view");
     await Promise.all([loadChapters(novel.id), loadNovelJobs(novel.id)]);
-    startJobPolling();
 }
 
 function startJobPolling() {
     stopJobPolling();
     jobPollTimer = setInterval(async () => {
         if (!currentNovel) return;
-        await Promise.all([loadNovelJobs(currentNovel.id), loadChapters(currentNovel.id)]);
-    }, 3000);
+        await loadNovelJobs(currentNovel.id);
+        // loadNovelJobs will call stopJobPolling() if no active jobs remain,
+        // so only refresh chapters if we're still polling
+        if (jobPollTimer) {
+            await loadChapters(currentNovel.id);
+            // Re-fetch novel metadata so title updates appear promptly
+            await refreshNovelMetadata(currentNovel.id);
+        }
+    }, 10000);
+}
+
+async function refreshNovelMetadata(novelId) {
+    try {
+        const res = await fetch(`${API_BASE}/novels/${novelId}`);
+        if (!res.ok) return;
+        const novel = await res.json();
+        if (novel.title && novel.title !== currentNovel.title) {
+            currentNovel.title = novel.title;
+            const titleLink = document.getElementById("chapters-title-link");
+            if (titleLink) titleLink.textContent = novel.title;
+        }
+    } catch (e) {
+        console.error("Failed to refresh novel metadata:", e);
+    }
 }
 
 function stopJobPolling() {
@@ -309,22 +331,25 @@ function renderChapterList() {
         return;
     }
     for (const ch of chapters) {
-        const item = document.createElement("div");
-        item.className = "chapter-item";
-
         const isReady = ch.status === "audio_ready";
         const isError = ch.status === "error";
         const isPlaying =
             currentChapter && currentChapter.chapter_number === ch.chapter_number;
+        const listened = currentNovel && isChapterListened(currentNovel.id, ch.chapter_number);
+
+        const item = document.createElement("div");
+        item.className = "chapter-item" + (listened ? " chapter-listened" : "");
 
         let statusLabel = ch.status;
         if (isReady && ch.audio_duration_seconds) {
             statusLabel = formatTime(ch.audio_duration_seconds);
         }
 
-        const chTitle = ch.title && ch.title !== "Untitled"
-            ? ch.title
-            : `Chapter ${ch.chapter_number}`;
+        const chTitle = ch.title_english
+            ? ch.title_english
+            : ch.title && ch.title !== "Untitled"
+                ? ch.title
+                : `Chapter ${ch.chapter_number}`;
 
         let actionsHtml = "";
         if (isError) {
@@ -337,9 +362,12 @@ function renderChapterList() {
                 `<button class="btn-ch-delete" title="Delete">&times;</button>`;
         }
 
+        const listenedIcon = listened ? '<span class="chapter-listened-icon" title="Listened">&#10003;</span>' : "";
+
         item.innerHTML =
             `<span class="chapter-number">${ch.chapter_number}</span>` +
             `<span class="chapter-title">${escapeHtml(chTitle)}</span>` +
+            `${listenedIcon}` +
             `<span class="chapter-status${isPlaying ? " playing" : ""}">${isReady ? statusLabel : ch.status}</span>` +
             `<span class="chapter-actions">${actionsHtml}</span>`;
 
@@ -425,9 +453,11 @@ async function loadNovelJobs(novelId) {
         );
         renderJobStatus(activeJobs);
 
-        // Stop polling when there are no running/queued jobs to watch
+        // Start or stop polling based on whether there are active jobs
         const hasRunning = activeJobs.some((j) => j.status === "queued" || j.status === "running");
-        if (!hasRunning) {
+        if (hasRunning && !jobPollTimer) {
+            startJobPolling();
+        } else if (!hasRunning) {
             stopJobPolling();
         }
     } catch (e) {
@@ -540,8 +570,9 @@ function loadChapter(chapter) {
     audio.playbackRate = currentSpeed;
 
     playerNovelTitle.textContent = currentNovel.title;
-    playerChapterTitle.textContent =
-        chapter.title && chapter.title !== "Untitled"
+    playerChapterTitle.textContent = chapter.title_english
+        ? chapter.title_english
+        : chapter.title && chapter.title !== "Untitled"
             ? chapter.title
             : `Chapter ${chapter.chapter_number}`;
     playerBar.classList.remove("hidden");
@@ -550,6 +581,7 @@ function loadChapter(chapter) {
     updateMediaSession();
     renderChapterList(); // refresh to highlight current
     startPlaybackSaving();
+    savePlaybackPositionLocal();
 }
 
 function formatTime(seconds) {
@@ -569,10 +601,12 @@ btnPlayPause.addEventListener("click", () => {
 
 audio.addEventListener("play", () => {
     btnPlayPause.innerHTML = "&#9646;&#9646;"; // pause icon
+    if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing";
 });
 
 audio.addEventListener("pause", () => {
     btnPlayPause.innerHTML = "&#9654;"; // play icon
+    if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
 });
 
 // Skip forward/back
@@ -608,6 +642,7 @@ speedControl.addEventListener("input", () => {
     const speed = parseFloat(speedControl.value);
     audio.playbackRate = speed;
     speedDisplay.textContent = `${speed.toFixed(1)}x`;
+    updatePositionState();
 });
 
 // Progress scrubber
@@ -617,17 +652,30 @@ playerScrubber.addEventListener("input", () => {
     }
 });
 
+audio.addEventListener("loadedmetadata", () => {
+    updatePositionState();
+});
+
 audio.addEventListener("timeupdate", () => {
     if (audio.duration) {
         playerScrubber.value = (audio.currentTime / audio.duration) * 100;
         playerCurrentTime.textContent = formatTime(audio.currentTime);
         playerDuration.textContent = formatTime(audio.duration);
+        updatePositionState();
+        // Mark as listened once past 90%
+        if (currentNovel && currentChapter && audio.currentTime / audio.duration > 0.9) {
+            markChapterListened(currentNovel.id, currentChapter.chapter_number);
+        }
     }
 });
 
 // ===================== Auto-Advance =====================
 
 audio.addEventListener("ended", async () => {
+    if (currentNovel && currentChapter) {
+        markChapterListened(currentNovel.id, currentChapter.chapter_number);
+        renderChapterList();
+    }
     await savePlaybackPosition();
     if (!currentChapter) return;
     const nextNum = currentChapter.chapter_number + 1;
@@ -642,40 +690,91 @@ audio.addEventListener("ended", async () => {
 // ===================== Media Session API =====================
 
 function updateMediaSession() {
-    if ("mediaSession" in navigator && currentChapter && currentNovel) {
-        navigator.mediaSession.metadata = new MediaMetadata({
-            title: currentChapter.title || `Chapter ${currentChapter.chapter_number}`,
-            artist: currentNovel.title,
-            album: "Light Novel Audiobook",
-        });
+    if (!("mediaSession" in navigator) || !currentChapter || !currentNovel) return;
 
-        navigator.mediaSession.setActionHandler("play", () => audio.play());
-        navigator.mediaSession.setActionHandler("pause", () => audio.pause());
-        navigator.mediaSession.setActionHandler("previoustrack", () => {
-            btnPrevChapter.click();
-        });
-        navigator.mediaSession.setActionHandler("nexttrack", () => {
-            btnNextChapter.click();
-        });
-        navigator.mediaSession.setActionHandler("seekbackward", (details) => {
-            audio.currentTime = Math.max(
-                0,
-                audio.currentTime - (details.seekOffset || 15),
-            );
-        });
-        navigator.mediaSession.setActionHandler("seekforward", (details) => {
-            audio.currentTime = Math.min(
-                audio.duration,
-                audio.currentTime + (details.seekOffset || 15),
-            );
-        });
-    }
+    const artwork = currentNovel.cover_image_path
+        ? [{ src: `${API_BASE}/novels/${currentNovel.id}/cover`, sizes: "512x512", type: "image/jpeg" }]
+        : [
+            { src: "icons/icon-192.png", sizes: "192x192", type: "image/png" },
+            { src: "icons/icon-512.png", sizes: "512x512", type: "image/png" },
+        ];
+
+    navigator.mediaSession.metadata = new MediaMetadata({
+        title: currentChapter.title_english || currentChapter.title || `Chapter ${currentChapter.chapter_number}`,
+        artist: currentNovel.title,
+        album: "Light Novel Audiobook",
+        artwork,
+    });
+
+    navigator.mediaSession.setActionHandler("play", () => audio.play());
+    navigator.mediaSession.setActionHandler("pause", () => audio.pause());
+    navigator.mediaSession.setActionHandler("stop", () => {
+        audio.pause();
+        audio.currentTime = 0;
+    });
+
+    // Use previoustrack/nexttrack for 15-second seek since those buttons
+    // reliably show in Android notifications. Chapter navigation is handled
+    // by auto-advance and the in-app UI.
+    navigator.mediaSession.setActionHandler("previoustrack", () => {
+        audio.currentTime = Math.max(0, audio.currentTime - 15);
+        updatePositionState();
+    });
+    navigator.mediaSession.setActionHandler("nexttrack", () => {
+        audio.currentTime = Math.min(audio.duration, audio.currentTime + 15);
+        updatePositionState();
+    });
+    navigator.mediaSession.setActionHandler("seekbackward", (details) => {
+        audio.currentTime = Math.max(
+            0,
+            audio.currentTime - (details.seekOffset || 15),
+        );
+        updatePositionState();
+    });
+    navigator.mediaSession.setActionHandler("seekforward", (details) => {
+        audio.currentTime = Math.min(
+            audio.duration,
+            audio.currentTime + (details.seekOffset || 15),
+        );
+        updatePositionState();
+    });
+    navigator.mediaSession.setActionHandler("seekto", (details) => {
+        if (details.fastSeek && "fastSeek" in audio) {
+            audio.fastSeek(details.seekTime);
+        } else {
+            audio.currentTime = details.seekTime;
+        }
+        updatePositionState();
+    });
+}
+
+function updatePositionState() {
+    if (!("mediaSession" in navigator) || !audio.duration || !isFinite(audio.duration)) return;
+    navigator.mediaSession.setPositionState({
+        duration: audio.duration,
+        playbackRate: audio.playbackRate,
+        position: audio.currentTime,
+    });
 }
 
 // ===================== Playback Position Sync =====================
 
+function savePlaybackPositionLocal() {
+    if (!currentNovel || !currentChapter) return;
+    const state = {
+        novel_id: currentNovel.id,
+        novel_title: currentNovel.title,
+        chapter_number: currentChapter.chapter_number,
+        position_seconds: audio.currentTime,
+        playback_speed: audio.playbackRate,
+    };
+    localStorage.setItem("playback_state", JSON.stringify(state));
+    localStorage.setItem("last_novel_id", String(currentNovel.id));
+}
+
 async function savePlaybackPosition() {
     if (!currentNovel || !currentChapter) return;
+    savePlaybackPositionLocal();
     try {
         await fetch(`${API_BASE}/novels/${currentNovel.id}/playback`, {
             method: "PUT",
@@ -691,15 +790,36 @@ async function savePlaybackPosition() {
     }
 }
 
-async function loadPlaybackPosition(novelId) {
+function loadPlaybackPositionLocal() {
     try {
-        const res = await fetch(`${API_BASE}/novels/${novelId}/playback`);
-        if (!res.ok) return null;
-        return await res.json();
-    } catch (e) {
-        console.error("Failed to load playback position:", e);
+        const data = JSON.parse(localStorage.getItem("playback_state") || "null");
+        return data;
+    } catch {
         return null;
     }
+}
+
+async function loadPlaybackPosition(novelId) {
+    // Try server first, fall back to localStorage
+    try {
+        const res = await fetch(`${API_BASE}/novels/${novelId}/playback`);
+        if (res.ok) {
+            const data = await res.json();
+            // Server returns default chapter_number=1, position=0 when no state saved
+            // Check if it's a real saved state (position > 0 or chapter > 1)
+            if (data.position_seconds > 0 || data.chapter_number > 1) {
+                return data;
+            }
+        }
+    } catch (e) {
+        console.error("Failed to load playback position from server:", e);
+    }
+    // Fall back to localStorage
+    const local = loadPlaybackPositionLocal();
+    if (local && String(local.novel_id) === String(novelId)) {
+        return local;
+    }
+    return null;
 }
 
 function startPlaybackSaving() {
@@ -721,6 +841,17 @@ audio.addEventListener("pause", () => {
 
 audio.addEventListener("play", () => {
     startPlaybackSaving();
+});
+
+// Save position when page is closed or hidden (e.g. switching tabs, closing app)
+window.addEventListener("beforeunload", () => {
+    savePlaybackPositionLocal();
+});
+
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+        savePlaybackPositionLocal();
+    }
 });
 
 // ===================== WebSocket Notifications =====================
@@ -1014,6 +1145,32 @@ document.getElementById("add-chapters-form").addEventListener("submit", async (e
     }
 });
 
+// ===================== Listened Chapters Tracking =====================
+
+function loadListenedChapters() {
+    try {
+        return JSON.parse(localStorage.getItem("listened_chapters") || "{}");
+    } catch {
+        return {};
+    }
+}
+
+function saveListenedChapters() {
+    localStorage.setItem("listened_chapters", JSON.stringify(listenedChapters));
+}
+
+function markChapterListened(novelId, chapterNumber) {
+    if (!listenedChapters[novelId]) listenedChapters[novelId] = [];
+    if (!listenedChapters[novelId].includes(chapterNumber)) {
+        listenedChapters[novelId].push(chapterNumber);
+        saveListenedChapters();
+    }
+}
+
+function isChapterListened(novelId, chapterNumber) {
+    return listenedChapters[novelId]?.includes(chapterNumber) || false;
+}
+
 // ===================== Utilities =====================
 
 function escapeHtml(text) {
@@ -1031,11 +1188,102 @@ if ("serviceWorker" in navigator) {
         .catch((err) => console.error("Service Worker registration failed:", err));
 }
 
+// ===================== Resume Listening =====================
+
+const resumeBanner = document.getElementById("resume-banner");
+const resumeDetail = document.getElementById("resume-detail");
+
+document.getElementById("btn-dismiss-resume").addEventListener("click", () => {
+    resumeBanner.classList.add("hidden");
+});
+
+document.getElementById("btn-resume-listening").addEventListener("click", async () => {
+    // Use the same localStorage source as the banner for consistency
+    const local = loadPlaybackPositionLocal();
+    if (!local || !local.novel_id) return;
+
+    const novel = novels.find((n) => String(n.id) === String(local.novel_id));
+    if (!novel) return;
+
+    resumeBanner.classList.add("hidden");
+    await openNovel(novel);
+    await resumePlaybackForNovel(novel.id);
+});
+
+async function resumePlaybackForNovel(novelId) {
+    const pos = await loadPlaybackPosition(novelId);
+    if (!pos || !pos.chapter_number) return;
+
+    const chapter = chapters.find(
+        (c) => c.chapter_number === pos.chapter_number && c.status === "audio_ready",
+    );
+    if (!chapter) return;
+
+    currentChapter = chapter;
+    const currentSpeed = pos.playback_speed || parseFloat(speedControl.value);
+    audio.src = `${API_BASE}/novels/${currentNovel.id}/chapters/${chapter.chapter_number}/audio`;
+    audio.load();
+    audio.playbackRate = currentSpeed;
+    speedControl.value = currentSpeed;
+    speedDisplay.textContent = `${currentSpeed.toFixed(1)}x`;
+
+    playerNovelTitle.textContent = currentNovel.title;
+    playerChapterTitle.textContent = chapter.title_english
+        ? chapter.title_english
+        : chapter.title && chapter.title !== "Untitled"
+            ? chapter.title
+            : `Chapter ${chapter.chapter_number}`;
+    playerBar.classList.remove("hidden");
+
+    // Seek to saved position once metadata loads
+    audio.addEventListener("loadedmetadata", function seekOnce() {
+        audio.removeEventListener("loadedmetadata", seekOnce);
+        if (pos.position_seconds && pos.position_seconds < audio.duration) {
+            audio.currentTime = pos.position_seconds;
+        }
+    });
+
+    updateMediaSession();
+    renderChapterList();
+    // Don't auto-play on resume — let the user press play
+}
+
+async function showResumeBanner() {
+    // Check localStorage first for fastest display
+    const local = loadPlaybackPositionLocal();
+    if (local && local.novel_id && (local.position_seconds > 0 || local.chapter_number > 1)) {
+        const novel = novels.find((n) => String(n.id) === String(local.novel_id));
+        if (novel) {
+            const chTitle = `Chapter ${local.chapter_number}`;
+            const timeStr = local.position_seconds ? ` at ${formatTime(local.position_seconds)}` : "";
+            resumeDetail.textContent = `${novel.title} — ${chTitle}${timeStr}`;
+            resumeBanner.classList.remove("hidden");
+            return;
+        }
+    }
+
+    // Fall back to server API
+    const lastNovelId = localStorage.getItem("last_novel_id");
+    if (!lastNovelId) return;
+
+    const novel = novels.find((n) => String(n.id) === String(lastNovelId));
+    if (!novel) return;
+
+    const pos = await loadPlaybackPosition(novel.id);
+    if (!pos || (!pos.position_seconds && pos.chapter_number <= 1)) return;
+
+    const chTitle = `Chapter ${pos.chapter_number}`;
+    const timeStr = pos.position_seconds ? ` at ${formatTime(pos.position_seconds)}` : "";
+    resumeDetail.textContent = `${novel.title} — ${chTitle}${timeStr}`;
+    resumeBanner.classList.remove("hidden");
+}
+
 // ===================== Init =====================
 
 async function init() {
     await loadNovels();
     connectWebSocket();
+    await showResumeBanner();
 }
 
 init();

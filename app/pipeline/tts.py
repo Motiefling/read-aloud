@@ -204,6 +204,16 @@ def generate_chapter_audio(
             "Synthesizing utterance %d/%d (%d chars)",
             i + 1, len(utterances), len(utterance),
         )
+        # Skip utterances that are predominantly Chinese — the translator
+        # occasionally passes through untranslated text that Kokoro can't handle.
+        from app.utils.chinese_detect import is_chinese_char
+        chinese_chars = sum(1 for c in utterance if is_chinese_char(c))
+        if chinese_chars > len(utterance) * 0.3:
+            logger.warning(
+                "Skipping utterance %d/%d — mostly Chinese (%d/%d chars): %s",
+                i + 1, len(utterances), chinese_chars, len(utterance), utterance[:80],
+            )
+            continue
         audio = tts_engine.synthesize_to_array(utterance)
         if len(audio) > 0:
             all_audio.append(audio)

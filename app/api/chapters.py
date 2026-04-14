@@ -14,7 +14,7 @@ async def list_chapters(novel_id: str):
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, novel_id, chapter_number, title, status, "
+            "SELECT id, novel_id, chapter_number, title, title_english, status, "
             "audio_duration_seconds, audio_file_size_bytes "
             "FROM chapters WHERE novel_id = ? ORDER BY chapter_number",
             (novel_id,),
@@ -31,7 +31,7 @@ async def get_chapter(novel_id: str, chapter_num: int):
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, novel_id, chapter_number, title, status, "
+            "SELECT id, novel_id, chapter_number, title, title_english, status, "
             "audio_duration_seconds, audio_file_size_bytes "
             "FROM chapters WHERE novel_id = ? AND chapter_number = ?",
             (novel_id, chapter_num),
@@ -63,6 +63,44 @@ async def rename_chapter(novel_id: str, chapter_num: int, request: RenameRequest
     finally:
         await db.close()
     return {"status": "updated"}
+
+
+@router.delete("/{novel_id}/chapters/{chapter_num}")
+async def delete_chapter(novel_id: str, chapter_num: int):
+    """Delete a single chapter and its audio file."""
+    import os
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, audio_path FROM chapters "
+            "WHERE novel_id = ? AND chapter_number = ?",
+            (novel_id, chapter_num),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise HTTPException(404, "Chapter not found")
+
+        audio_path = row["audio_path"]
+        await db.execute(
+            "DELETE FROM chapters WHERE novel_id = ? AND chapter_number = ?",
+            (novel_id, chapter_num),
+        )
+        await db.execute(
+            "UPDATE novels SET total_chapters = total_chapters - 1 WHERE id = ?",
+            (novel_id,),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    # Clean up audio file on disk
+    if audio_path:
+        full_path = BASE_DIR / audio_path
+        if full_path.exists():
+            os.remove(full_path)
+
+    return {"status": "deleted"}
 
 
 @router.get("/{novel_id}/chapters/{chapter_num}/audio")

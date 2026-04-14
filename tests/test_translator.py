@@ -10,7 +10,6 @@ from app.pipeline.translator import (
     TranslationError,
     apply_term_dictionary,
     annotate_chinese_names,
-    _LONG_PARAGRAPH_THRESHOLD,
 )
 
 
@@ -94,17 +93,20 @@ def _make_mock_translator():
     t._model = MagicMock()
     t._tokenizer = MagicMock()
 
-    # Mock tokenizer __call__: returns dict with input_ids
-    def mock_tokenizer_call(*args, **kwargs):
-        return {"input_ids": torch.tensor([[1, 2, 3]])}
+    # Mock model.device
+    t._model.device = torch.device("cpu")
 
-    t._tokenizer.side_effect = mock_tokenizer_call
+    # Mock tokenizer.apply_chat_template: returns a string
+    t._tokenizer.apply_chat_template.return_value = "<|im_start|>system\n...<|im_end|>\n<|im_start|>user\n...<|im_end|>\n<|im_start|>assistant\n"
 
-    # Mock model.generate: returns one output row
-    def mock_generate(**kwargs):
-        return torch.tensor([[100, 200, 2]])
+    # Mock tokenizer __call__: returns dict with input_ids tensor
+    mock_inputs = MagicMock()
+    mock_inputs.__getitem__ = lambda self, key: torch.tensor([[1, 2, 3]]) if key == "input_ids" else None
+    mock_inputs.to.return_value = {"input_ids": torch.tensor([[1, 2, 3]])}
+    t._tokenizer.return_value = mock_inputs
 
-    t._model.generate.side_effect = mock_generate
+    # Mock model.generate: returns tokens including the input prefix + generated
+    t._model.generate.return_value = torch.tensor([[1, 2, 3, 100, 200, 2]])
 
     # Mock decode: returns "translated"
     t._tokenizer.decode.return_value = "translated"
@@ -113,7 +115,7 @@ def _make_mock_translator():
 
 
 class TestTranslator:
-    """Tests for the Opus-MT translation pipeline."""
+    """Tests for the Qwen translation pipeline."""
 
     def test_translate_simple_text(self):
         """Test basic translation flow with mocked model."""
@@ -128,14 +130,6 @@ class TestTranslator:
         result = t.translate_text("")
         assert result == ""
         t._model.generate.assert_not_called()
-
-    def test_translate_preserves_paragraphs(self):
-        """Test that paragraph structure is maintained."""
-        t = _make_mock_translator()
-        result = t.translate_chapter("First paragraph\n\nSecond paragraph")
-        lines = result.split("\n")
-        assert len(lines) == 3  # para, blank, para
-        assert lines[1] == ""  # blank line preserved
 
     def test_translate_chapter_empty(self):
         """Test that empty chapter returns empty string."""
@@ -168,31 +162,13 @@ class TestTranslator:
         with pytest.raises(TranslationError, match="Model not loaded"):
             t.translate_text("你好")
 
-    def test_split_long_paragraph(self):
-        """Test that long paragraphs are split at sentence boundaries."""
-        t = Translator()
-        long_text = "这是第一句话。" * 50
-        assert len(long_text) > _LONG_PARAGRAPH_THRESHOLD
-        segments = t._split_long_paragraph(long_text)
-        assert len(segments) > 1
-
-    def test_split_short_paragraph(self):
-        """Test that short paragraphs are not split."""
-        t = Translator()
-        short_text = "这是一句短话。"
-        assert len(short_text) <= _LONG_PARAGRAPH_THRESHOLD
-        segments = t._split_long_paragraph(short_text)
-        assert len(segments) == 1
-        assert segments[0] == short_text
-
     def test_traditional_chinese_converted(self):
         """Test that Traditional Chinese is converted to Simplified before translation."""
         t = _make_mock_translator()
         # The OpenCC converter is real (not mocked), so it will convert
         t.translate_text("開門")
-        # Verify tokenizer was called (we can't easily check the converted text
-        # without inspecting call args, but we verify no error occurs)
-        t._tokenizer.assert_called_once()
+        # Verify the chat template was called (model was invoked)
+        t._tokenizer.apply_chat_template.assert_called_once()
 
 
 class TestChineseDetect:

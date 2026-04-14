@@ -156,6 +156,82 @@ header button {
     color: var(--text-secondary);
 }
 
+/* ===================== Listened Chapters ===================== */
+.chapter-listened .chapter-number,
+.chapter-listened .chapter-title {
+    color: var(--text-secondary);
+}
+
+.chapter-listened-icon {
+    color: #4caf50;
+    font-size: 0.9rem;
+    margin-right: 0.5rem;
+    flex-shrink: 0;
+}
+
+/* ===================== Resume Banner ===================== */
+.resume-banner {
+    background: var(--bg-card);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.resume-banner.hidden {
+    display: none;
+}
+
+.resume-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.resume-label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+#resume-detail {
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+#btn-resume-listening {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: var(--radius);
+    padding: 0.4rem 0.75rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+#btn-resume-listening:hover {
+    background: var(--accent-hover);
+}
+
+#btn-dismiss-resume {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 1.25rem;
+    cursor: pointer;
+    padding: 0.25rem;
+    line-height: 1;
+}
+
+#btn-dismiss-resume:hover {
+    color: var(--text-primary);
+}
+
 /* ===================== Player Bar ===================== */
 .player-bar {
     position: fixed;

@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS novels (
     dictionary_id TEXT,
     total_chapters INTEGER DEFAULT 0,
     processed_chapters INTEGER DEFAULT 0,
+    cover_image_path TEXT,
     status TEXT DEFAULT 'pending',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -22,6 +23,7 @@ CREATE TABLE IF NOT EXISTS chapters (
     novel_id TEXT NOT NULL REFERENCES novels(id),
     chapter_number INTEGER NOT NULL,
     title TEXT,
+    title_english TEXT,
     source_url TEXT,
     chinese_text TEXT,
     english_text TEXT,
@@ -77,6 +79,11 @@ async def init_db() -> None:
     db = await get_db()
     try:
         await db.executescript(SQL_CREATE_TABLES)
+        # Migrations for existing databases
+        cursor = await db.execute("PRAGMA table_info(chapters)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "title_english" not in columns:
+            await db.execute("ALTER TABLE chapters ADD COLUMN title_english TEXT")
         await db.commit()
     finally:
         await db.close()
