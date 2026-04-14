@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import os
+
 import yaml
 from pydantic import BaseModel
 
@@ -9,9 +11,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 def load_config(config_path: Path | None = None) -> dict:
-    """Load configuration from config.yaml."""
+    """Load configuration from a YAML file.
+ 
+    Resolution order: explicit path > READ_ALOUD_CONFIG env var > config.yaml
+    """
     if config_path is None:
-        config_path = BASE_DIR / "config.yaml"
+        env_path = os.environ.get("READ_ALOUD_CONFIG")
+        if env_path:
+            config_path = Path(env_path)
+            if not config_path.is_absolute():
+                config_path = BASE_DIR / config_path
+        else:
+            config_path = BASE_DIR / "config.yaml"
     with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
