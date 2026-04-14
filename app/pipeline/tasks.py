@@ -179,7 +179,7 @@ def _translate_and_tts_chapter(
             novel_id=novel_id,
             chapter_number=chapter_number,
         )
-        relative_path = str(audio_path.relative_to(get_data_dir()))
+        relative_path = str(audio_path.relative_to(get_data_dir())).replace("\\", "/")
         duration = get_audio_duration(audio_path)
         file_size = audio_path.stat().st_size
         tts_elapsed = time.time() - tts_start
@@ -649,7 +649,7 @@ def generate_audio_task(self, job_id: str, chapter_id: str):
             chapter_number=chapter_number,
         )
 
-        relative_path = str(audio_path.relative_to(get_data_dir()))
+        relative_path = str(audio_path.relative_to(get_data_dir())).replace("\\", "/")
         duration = get_audio_duration(audio_path)
         file_size = audio_path.stat().st_size
         conn.execute(
