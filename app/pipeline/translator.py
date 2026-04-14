@@ -14,15 +14,58 @@ import re
 
 import torch
 from opencc import OpenCC
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, MarianMTModel, MarianTokenizer
 
 from app.config import settings
+from app.utils.chinese_detect import is_chinese_char, extract_chinese_segments
 
 logger = logging.getLogger(__name__)
 
-# Rough token-to-character ratio for Chinese text. Used to estimate
-# whether a chapter fits in a single inference call.
-_MAX_CHAPTER_CHARS = 6000
+# Max Chinese characters per translation chunk.  Keeping this moderate
+# reduces the chance of Qwen hallucinating on long context.
+_MAX_CHAPTER_CHARS = 3000
+
+# Chinese sentence-ending punctuation used for splitting long paragraphs.
+_SENTENCE_ENDINGS = re.compile(r'(?<=[。！？；…」』])')
+
+# Opus-MT model for fallback translation of Chinese that Qwen misses
+_OPUS_MT_MODEL_NAME = "Helsinki-NLP/opus-mt-zh-en"
+
+
+def _split_long_paragraph(text: str, max_chars: int) -> list[str]:
+    """Split a long paragraph into pieces on Chinese sentence boundaries.
+
+    Tries sentence-ending punctuation first. Falls back to splitting on
+    any Chinese punctuation, and ultimately on a hard character limit.
+    """
+    if len(text) <= max_chars:
+        return [text]
+
+    # Split on sentence-ending punctuation
+    sentences = _SENTENCE_ENDINGS.split(text)
+    # Filter empty strings from the split
+    sentences = [s for s in sentences if s.strip()]
+
+    if len(sentences) <= 1:
+        # No sentence boundaries found — hard split at max_chars
+        pieces = []
+        for i in range(0, len(text), max_chars):
+            pieces.append(text[i:i + max_chars])
+        return pieces
+
+    # Recombine sentences into chunks that fit within max_chars
+    pieces = []
+    current = ""
+    for sentence in sentences:
+        if current and len(current) + len(sentence) > max_chars:
+            pieces.append(current)
+            current = sentence
+        else:
+            current += sentence
+    if current:
+        pieces.append(current)
+
+    return pieces
 
 
 class TranslationError(Exception):
@@ -67,8 +110,15 @@ class Translator:
                 f"Model not found: '{self.config.model_path}': {e}"
             ) from e
 
-    def _generate(self, user_message: str) -> str:
-        """Run a single chat completion with the system prompt and user message."""
+    def _generate(self, user_message: str, auto_fallback: bool = True) -> str:
+        """Run a single chat completion with the system prompt and user message.
+
+        Args:
+            user_message: The Chinese text to translate.
+            auto_fallback: If True, automatically run Opus-MT on any Chinese
+                that leaks through. Set to False when the caller handles
+                fallback separately (e.g. translate_chapter applies term dict first).
+        """
         import time
 
         messages = [
@@ -105,14 +155,16 @@ class Translator:
             outputs[0][input_len:], skip_special_tokens=True
         ).strip()
 
-        # Warn if Chinese leaked through
-        from app.utils.chinese_detect import is_chinese_char
+        # If Chinese leaked through, patch it with Opus-MT fallback
         chinese_count = sum(1 for c in result if is_chinese_char(c))
         if chinese_count > 0:
             logger.warning(
-                "Translation output contains %d Chinese characters — may have untranslated text",
+                "Translation output contains %d Chinese characters",
                 chinese_count,
             )
+            if auto_fallback:
+                logger.info("Running Opus-MT fallback from _generate")
+                result = fallback_translate_chinese(result)
 
         return result
 
@@ -209,44 +261,66 @@ class Translator:
             "single pass" if len(simplified) <= _MAX_CHAPTER_CHARS else "chunked",
         )
 
+        # Disable auto-fallback in _generate so we can apply term dict first
+        has_term_dict = bool(term_dict)
         try:
             if len(simplified) <= _MAX_CHAPTER_CHARS:
-                full_translation = self._generate(simplified)
+                full_translation = self._generate(simplified, auto_fallback=not has_term_dict)
             else:
-                full_translation = self._translate_chunked(simplified)
+                full_translation = self._translate_chunked(simplified, auto_fallback=not has_term_dict)
         except RuntimeError as e:
             raise TranslationError(f"Translation inference failed: {e}") from e
 
-        # Post-processing
+        # Post-processing: term dict first (preferred translations), then
+        # Opus-MT fallback catches any remaining Chinese that the dict missed
         if term_dict:
             full_translation = apply_term_dictionary(full_translation, term_dict)
+
+        remaining_chinese = sum(1 for c in full_translation if is_chinese_char(c))
+        if remaining_chinese > 0:
+            logger.info(
+                "Chapter still has %d Chinese chars after term dict — running Opus-MT fallback",
+                remaining_chinese,
+            )
+            full_translation = fallback_translate_chinese(full_translation)
+
+        if term_dict:
             full_translation = annotate_chinese_names(full_translation, term_dict)
 
         return full_translation
 
-    def _translate_chunked(self, text: str) -> list[str]:
-        """Translate long text by splitting into paragraph-sized chunks."""
+    def _translate_chunked(self, text: str, auto_fallback: bool = True) -> str:
+        """Translate long text by splitting into paragraph-sized chunks.
+
+        Paragraphs that exceed ``_MAX_CHAPTER_CHARS`` on their own are
+        further split on Chinese sentence-ending punctuation so that each
+        piece stays within the limit.
+        """
         paragraphs = text.split("\n")
-        chunk = []
+        chunk: list[str] = []
         chunk_len = 0
-        translated_parts = []
+        translated_parts: list[str] = []
+
+        def _flush():
+            nonlocal chunk, chunk_len
+            if not chunk:
+                return
+            logger.info("Translating chunk %d (%d chars)", len(translated_parts) + 1, chunk_len)
+            translated_parts.append(self._generate("\n".join(chunk), auto_fallback=auto_fallback))
+            chunk = []
+            chunk_len = 0
 
         for para in paragraphs:
-            # If adding this paragraph would exceed the limit, flush the chunk
-            if chunk and chunk_len + len(para) > _MAX_CHAPTER_CHARS:
-                logger.info("Translating chunk %d (%d chars)", len(translated_parts) + 1, chunk_len)
-                translated_parts.append(self._generate("\n".join(chunk)))
-                chunk = []
-                chunk_len = 0
+            # Split oversized paragraphs on Chinese sentence boundaries
+            pieces = _split_long_paragraph(para, _MAX_CHAPTER_CHARS) if len(para) > _MAX_CHAPTER_CHARS else [para]
 
-            chunk.append(para)
-            chunk_len += len(para)
+            for piece in pieces:
+                if chunk and chunk_len + len(piece) > _MAX_CHAPTER_CHARS:
+                    _flush()
+                chunk.append(piece)
+                chunk_len += len(piece)
 
-        # Flush remaining
-        if chunk:
-            logger.info("Translating final chunk %d (%d chars)", len(translated_parts) + 1, chunk_len)
-            translated_parts.append(self._generate("\n".join(chunk)))
-
+        _flush()
         return "\n\n".join(translated_parts)
 
 
@@ -291,6 +365,61 @@ def apply_term_dictionary(text: str, term_dict: dict) -> str:
         text = text.replace(chinese, english)
 
     return text
+
+
+# --------------- Opus-MT fallback ---------------
+
+_opus_model: "MarianMTModel | None" = None
+_opus_tokenizer: "MarianTokenizer | None" = None
+
+
+def _get_opus_mt():
+    """Lazy-load the Opus-MT zh→en model (used only when Qwen leaks Chinese)."""
+    global _opus_model, _opus_tokenizer
+    if _opus_model is None:
+        logger.info("Loading Opus-MT fallback model: %s", _OPUS_MT_MODEL_NAME)
+        _opus_tokenizer = MarianTokenizer.from_pretrained(_OPUS_MT_MODEL_NAME)
+        _opus_model = MarianMTModel.from_pretrained(_OPUS_MT_MODEL_NAME)
+        _opus_model.eval()
+        logger.info("Opus-MT fallback model loaded")
+    return _opus_model, _opus_tokenizer
+
+
+def fallback_translate_chinese(text: str) -> str:
+    """
+    Find runs of Chinese characters in text and translate them via Opus-MT.
+
+    Operates on the Qwen output — finds contiguous Chinese segments,
+    translates each one, and splices the English back into position.
+    This is a safety net, not a primary translator.
+    """
+    segments = extract_chinese_segments(text)
+    if not segments:
+        return text
+
+    model, tokenizer = _get_opus_mt()
+
+    # Collect unique Chinese strings to translate (avoid duplicates)
+    unique_chinese = list({seg[2] for seg in segments})
+    logger.info(
+        "Opus-MT fallback: translating %d unique Chinese segment(s)", len(unique_chinese)
+    )
+
+    translations = {}
+    for zh_text in unique_chinese:
+        inputs = tokenizer(zh_text, return_tensors="pt", padding=True, truncation=True)
+        with torch.no_grad():
+            output_ids = model.generate(**inputs, max_new_tokens=128)
+        en_text = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
+        translations[zh_text] = en_text
+        logger.debug("Opus-MT: '%s' → '%s'", zh_text, en_text)
+
+    # Replace Chinese segments in reverse order to preserve positions
+    result = text
+    for start, end, zh_text in reversed(segments):
+        result = result[:start] + translations[zh_text] + result[end:]
+
+    return result
 
 
 def annotate_chinese_names(text: str, term_dict: dict) -> str:

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
     <meta name="theme-color" content="#1a1a2e">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -11,11 +11,13 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+    <div id="app-layout">
     <!-- Novel Library View -->
     <div id="library-view" class="view active">
         <header>
             <h1>My Light Novels</h1>
             <div style="display: flex; gap: 0.5rem;">
+                <button id="btn-sort-novels" class="btn-sort" aria-label="Sort novels" title="Sort novels">&#x2195;</button>
                 <button id="btn-settings" aria-label="Settings" title="Voice settings">&#9881;</button>
                 <button id="btn-request-novel" aria-label="Request new novel">+</button>
             </div>
@@ -40,6 +42,7 @@
             <button id="btn-back-library" aria-label="Back to library">&larr;</button>
             <h1 id="chapters-title"><a id="chapters-title-link" href="#" target="_blank" rel="noopener">Novel Title</a></h1>
             <div style="display: flex; gap: 0.5rem;">
+                <button id="btn-sort-chapters" class="btn-sort" aria-label="Sort chapters" title="Sort chapters">&#x2195;</button>
                 <button id="btn-rename-novel" aria-label="Rename novel" title="Rename novel">&#9998;</button>
                 <button id="btn-add-chapters" aria-label="Download more chapters" title="Download more chapters">+</button>
                 <button id="btn-check-updates" aria-label="Check for new chapters" title="Check for new chapters">&#x21bb;</button>
@@ -64,6 +67,7 @@
             <!-- Voice cards rendered by app.js -->
         </div>
     </div>
+    </div><!-- /app-layout -->
 
     <!-- Request Novel Modal -->
     <div id="request-modal" class="modal hidden">
@@ -131,8 +135,8 @@
         </div>
         <div class="player-speed">
             <label for="speed-control">Speed:</label>
-            <input type="range" id="speed-control" min="0.5" max="3.0" step="0.1" value="2.0">
-            <span id="speed-display">2.0x</span>
+            <input type="range" id="speed-control" min="0.5" max="3.0" step="0.1" value="1.0">
+            <span id="speed-display">1.0x</span>
         </div>
     </div>
 

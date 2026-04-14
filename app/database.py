@@ -1,8 +1,8 @@
 import aiosqlite
 
-from app.config import settings, BASE_DIR
+from app.config import get_database_path
 
-DATABASE_PATH = BASE_DIR / settings.server.database_path
+DATABASE_PATH = get_database_path()
 
 SQL_CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS novels (
@@ -84,6 +84,26 @@ async def init_db() -> None:
         columns = {row[1] for row in await cursor.fetchall()}
         if "title_english" not in columns:
             await db.execute("ALTER TABLE chapters ADD COLUMN title_english TEXT")
+
+        # Migrate paths from BASE_DIR-relative (data\novels\... or data/novels/...)
+        # to data_dir-relative (novels\...) for portable data directory support
+        await db.execute(
+            "UPDATE chapters SET audio_path = SUBSTR(audio_path, 6) "
+            "WHERE audio_path LIKE 'data\\novels\\%'"
+        )
+        await db.execute(
+            "UPDATE chapters SET audio_path = SUBSTR(audio_path, 6) "
+            "WHERE audio_path LIKE 'data/novels/%'"
+        )
+        await db.execute(
+            "UPDATE novels SET cover_image_path = SUBSTR(cover_image_path, 6) "
+            "WHERE cover_image_path LIKE 'data\\novels\\%'"
+        )
+        await db.execute(
+            "UPDATE novels SET cover_image_path = SUBSTR(cover_image_path, 6) "
+            "WHERE cover_image_path LIKE 'data/novels/%'"
+        )
+
         await db.commit()
     finally:
         await db.close()

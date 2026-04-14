@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 
 from app.database import get_db
 from app.models import NovelRequest, NovelResponse, AddChaptersRequest, RenameRequest
-from app.config import BASE_DIR, settings
+from app.config import get_data_dir
 
 router = APIRouter()
 
@@ -170,7 +170,7 @@ async def get_cover_image(novel_id: str):
     finally:
         await db.close()
 
-    cover_path = BASE_DIR / row["cover_image_path"]
+    cover_path = get_data_dir() / row["cover_image_path"]
     if not cover_path.exists():
         raise HTTPException(404, "Cover image file not found on disk")
 
@@ -212,7 +212,7 @@ async def delete_novel(novel_id: str):
     finally:
         await db.close()
 
-    audio_dir = BASE_DIR / settings.server.data_dir / "novels" / novel_id
+    audio_dir = get_data_dir() / "novels" / novel_id
     if audio_dir.exists():
         shutil.rmtree(audio_dir)
 

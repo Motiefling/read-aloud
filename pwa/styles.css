@@ -23,19 +23,39 @@ body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: var(--bg-primary);
     color: var(--text-primary);
-    min-height: 100vh;
+    height: 100vh;
+    height: 100dvh; /* accounts for mobile browser chrome */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
     -webkit-font-smoothing: antialiased;
+}
+
+#app-layout {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 /* ===================== Views ===================== */
 .view {
     display: none;
+    flex-direction: column;
     padding: 1rem;
-    padding-bottom: 10rem; /* space for player bar */
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
 }
 
 .view.active {
-    display: block;
+    display: flex;
+}
+
+.view > .content {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
 }
 
 /* ===================== Header ===================== */
@@ -63,6 +83,16 @@ header button {
     cursor: pointer;
 }
 
+.btn-sort {
+    background: var(--border) !important;
+    font-size: 1rem !important;
+    padding: 0.5rem 0.6rem !important;
+}
+
+.btn-sort:hover {
+    background: var(--accent) !important;
+}
+
 /* ===================== Novel Cards ===================== */
 .novel-card {
     background: var(--bg-card);
@@ -75,6 +105,11 @@ header button {
 }
 
 .novel-card:hover {
+    background: var(--bg-secondary);
+}
+
+.novel-card.active {
+    border-left: 3px solid var(--accent);
     background: var(--bg-secondary);
 }
 
@@ -234,14 +269,10 @@ header button {
 
 /* ===================== Player Bar ===================== */
 .player-bar {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
     background: var(--player-bg);
-    padding: 0.75rem 1rem;
+    padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom, 0px));
     border-top: 1px solid var(--border);
-    z-index: 100;
+    flex-shrink: 0;
 }
 
 .player-bar.hidden {
@@ -566,4 +597,48 @@ header button {
     color: white;
     opacity: 0.7;
     cursor: default;
+}
+
+/* ===================== Chapter Actions ===================== */
+.chapter-actions {
+    display: flex;
+    gap: 0.25rem;
+    flex-shrink: 0;
+}
+
+.chapter-actions button {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 0.25rem;
+    font-size: 0.9rem;
+    border-radius: var(--radius);
+}
+
+.chapter-actions button:hover {
+    color: var(--accent);
+}
+
+/* ===================== Desktop Layout ===================== */
+@media (min-width: 768px) {
+    #app-layout {
+        flex-direction: row;
+    }
+
+    #library-view {
+        display: flex !important;
+        flex: 0 0 320px;
+        border-right: 1px solid var(--border);
+    }
+
+    #chapters-view,
+    #settings-view {
+        flex: 1;
+        min-width: 0;
+    }
+
+    #btn-back-library {
+        display: none;
+    }
 }

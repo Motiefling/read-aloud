@@ -1,7 +1,9 @@
+import uuid as _uuid
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from app.config import BASE_DIR
+from app.config import get_data_dir
 from app.database import get_db
 from app.models import ChapterResponse, PlaybackStateUpdate, PlaybackStateResponse, RenameRequest
 
@@ -96,11 +98,51 @@ async def delete_chapter(novel_id: str, chapter_num: int):
 
     # Clean up audio file on disk
     if audio_path:
-        full_path = BASE_DIR / audio_path
+        full_path = get_data_dir() / audio_path
         if full_path.exists():
             os.remove(full_path)
 
     return {"status": "deleted"}
+
+
+@router.post("/{novel_id}/chapters/{chapter_num}/retry")
+async def retry_chapter(novel_id: str, chapter_num: int):
+    """Retry translate + TTS for a single error chapter."""
+    from app.pipeline.tasks import retry_chapter_task
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, status, chinese_text FROM chapters "
+            "WHERE novel_id = ? AND chapter_number = ?",
+            (novel_id, chapter_num),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise HTTPException(404, "Chapter not found")
+        if row["status"] not in ("error", "scraped", "audio_ready", "translated"):
+            raise HTTPException(400, f"Chapter is {row['status']}, not retryable")
+        if not row["chinese_text"]:
+            raise HTTPException(400, "Chapter has no Chinese text to process")
+
+        chapter_id = row["id"]
+
+        # Create a job to track this retry
+        job_id = str(_uuid.uuid4())
+        await db.execute(
+            "INSERT INTO jobs (id, novel_id, job_type, status, current_step) "
+            "VALUES (?, ?, 'retry_chapter', 'queued', ?)",
+            (job_id, novel_id, f"Queued — retrying chapter {chapter_num}"),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    retry_chapter_task.apply_async(
+        args=[job_id, novel_id, chapter_id], task_id=job_id,
+    )
+
+    return {"job_id": job_id, "status": "queued"}
 
 
 @router.get("/{novel_id}/chapters/{chapter_num}/audio")
@@ -121,7 +163,7 @@ async def stream_chapter_audio(novel_id: str, chapter_num: int):
     finally:
         await db.close()
 
-    audio_path = BASE_DIR / row["audio_path"]
+    audio_path = get_data_dir() / row["audio_path"]
     if not audio_path.exists():
         raise HTTPException(404, "Audio file not found on disk")
 

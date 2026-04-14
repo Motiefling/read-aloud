@@ -138,3 +138,23 @@ class AppConfig(BaseModel):
 
 # Global config instance — initialized on first import
 settings = AppConfig.from_yaml()
+
+
+def get_data_dir() -> Path:
+    """Resolve the data directory as an absolute Path.
+
+    If the configured data_dir is absolute (e.g. 'N:/Read Aloud'), it is used
+    as-is. If relative (e.g. 'data'), it is resolved relative to BASE_DIR.
+    """
+    p = Path(settings.server.data_dir)
+    if p.is_absolute():
+        return p
+    return BASE_DIR / p
+
+
+def get_database_path() -> Path:
+    """Resolve the database path as an absolute Path."""
+    p = Path(settings.server.database_path)
+    if p.is_absolute():
+        return p
+    return BASE_DIR / p

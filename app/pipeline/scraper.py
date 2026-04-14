@@ -19,7 +19,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup, NavigableString
 
-from app.config import settings, SiteProfile, ScraperSettings, BASE_DIR
+from app.config import settings, SiteProfile, ScraperSettings, BASE_DIR, get_data_dir
 
 logger = logging.getLogger(__name__)
 
@@ -438,6 +438,22 @@ async def scrape_novel(
     return chapters
 
 
+async def check_for_updates(last_chapter_url: str) -> bool:
+    """
+    Lightweight check: fetch the last chapter's page and see if a next-chapter
+    link exists.  Does NOT scrape content — just checks for the link.
+
+    Returns True if a next chapter is available, False otherwise.
+    """
+    domain, profile = get_site_profile(last_chapter_url)
+    config = settings.scraper
+
+    async with _create_fetcher(profile, config) as fetch:
+        soup = await fetch(last_chapter_url)
+        next_url = _extract_next_url(soup, domain, profile, last_chapter_url)
+        return next_url is not None
+
+
 async def scrape_novel_title(source_url: str) -> str | None:
     """
     Scrape the novel title from a book/TOC page.
@@ -532,12 +548,12 @@ async def scrape_cover_image(source_url: str, novel_id: str) -> str | None:
             else:
                 ext = ".jpg"
 
-            cover_dir = BASE_DIR / settings.server.data_dir / "novels" / novel_id
+            cover_dir = get_data_dir() / "novels" / novel_id
             cover_dir.mkdir(parents=True, exist_ok=True)
             cover_path = cover_dir / f"cover{ext}"
             cover_path.write_bytes(resp.content)
 
-            relative_path = str(cover_path.relative_to(BASE_DIR)).replace("\\", "/")
+            relative_path = str(cover_path.relative_to(get_data_dir())).replace("\\", "/")
             logger.info("Saved cover image: %s", relative_path)
             return relative_path
 
