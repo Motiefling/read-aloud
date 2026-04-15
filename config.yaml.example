@@ -1,0 +1,71 @@
+celery:
+  broker_url: redis://localhost:6379/0
+  result_backend: redis://localhost:6379/0
+scraper:
+  default_encoding: utf-8
+  max_retries: 3
+  request_delay_seconds: 1.5
+  sites:
+    dxmwx.org:
+      chapter_url_pattern: /read/{book_id}_{chapter_id}.html
+      content_selector: '#Lab_Contents'
+      next_page_selector: null
+      notes: 'Two-level TOC: book page lists chapter ranges, each range page lists
+        individual chapters. Nav links are bare <a> tags with text down-one-chapter/up-one-chapter.
+        Sentinel next URL ending in _0.html means no next chapter.'
+      title_selector: h1
+      toc_url_pattern: /book/{book_id}.html
+    funs.me:
+      chapter_url_pattern: /mtext/{book_id}/{chapter_id}.html
+      content_selector: '#ChSize'
+      next_page_selector: null
+      notes: 'Content in #ChSize. Nav links are bare <a> with relative hrefs.
+        TOC lists all chapters on one page as <a> tags under a <b> header.'
+      title_selector: null
+      toc_url_pattern: /book/{book_id}.html
+    ixdzs8.com:
+      browser_wait_time: 5000
+      chapter_url_pattern: /read/{book_id}/p{number}.html
+      content_selector: article.page-content
+      next_page_selector: null
+      notes: Browser verification challenge on chapter pages — requires Playwright.
+      title_selector: .page-d-top
+      toc_url_pattern: /read/{book_id}/
+      use_browser: true
+    piaotia.com:
+      browser_wait_time: 5000
+      chapter_url_pattern: /html/{group}/{book_id}/{chapter_id}.html
+      content_selector: '#content'
+      encoding: gbk
+      next_page_selector: null
+      notes: 'Cloudflare-protected, requires Playwright. GBK encoding.'
+      title_selector: h1
+      toc_url_pattern: /html/{group}/{book_id}/
+      use_browser: true
+    ttkan.co:
+      chapter_url_pattern: /novel/pagea/{slug}_{number}.html
+      content_selector: .content
+      next_page_selector: .next_page_links a
+      notes: Nuxt.js SSR site. Content in .content with <p> tags.
+      title_selector: .title h1
+      toc_url_pattern: /novel/chapters/{slug}
+  user_agent: Mozilla/5.0 (compatible; personal audiobook project)
+server:
+  data_dir: ./data
+  database_path: ./data/audiobooks.db
+  host: 0.0.0.0
+  port: 8800
+translation:
+  device: cuda
+  max_new_tokens: 4096
+  model_path: Qwen/Qwen2.5-7B-Instruct
+  temperature: 0.3
+tts:
+  device: cuda
+  engine: kokoro
+  lang_code: a
+  output_format: mp3
+  pause_between_paragraphs_ms: 700
+  sample_rate: 24000
+  speed: 1.0
+  voice: af_bella

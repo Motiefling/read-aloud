@@ -25,6 +25,18 @@ venv/
 .env
 .env.*
 
+# Config files (contain personal IPs, paths, server details)
+config.yaml
+config.worker.yaml
+config.server.yaml
+
+# Batch scripts (contain personal paths and SSH targets)
+*.bat
+
+# Project notes (contain personal info)
+instructions.md
+novel_sources.md
+
 # Data (runtime-generated)
 data/audiobooks.db
 data/novels/

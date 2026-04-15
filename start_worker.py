@@ -45,8 +45,14 @@ def main():
     atexit.register(cleanup)
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
 
+    # Load config to display broker URL dynamically
+    import yaml
+    with open("config.worker.yaml") as f:
+        worker_cfg = yaml.safe_load(f)
+    broker_url = worker_cfg.get("celery", {}).get("broker_url", "unknown")
+
     print("Starting Celery worker (config: config.worker.yaml)...")
-    print(f"  Broker: redis://100.68.215.54:6379/0")
+    print(f"  Broker: {broker_url}")
 
     proc = subprocess.Popen(
         [
