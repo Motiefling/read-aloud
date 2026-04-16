@@ -8,7 +8,7 @@
 // ===================== Configuration =====================
 
 const API_BASE = window.location.origin + "/api";
-const WS_URL = `ws://${window.location.host}/ws/notifications`;
+const WS_URL = `${window.isSecureContext ? 'wss' : 'ws'}://${window.location.host}/ws/notifications;
 const PLAYBACK_SAVE_INTERVAL = 10000; // save position every 10 seconds
 
 // ===================== State =====================
