@@ -409,7 +409,7 @@ def fallback_translate_chinese(text: str) -> str:
     for zh_text in unique_chinese:
         inputs = tokenizer(zh_text, return_tensors="pt", padding=True, truncation=True)
         with torch.no_grad():
-            output_ids = model.generate(**inputs, max_new_tokens=128)
+            output_ids = model.generate(**inputs, max_new_tokens=128, max_length=None)
         en_text = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
         translations[zh_text] = en_text
         logger.debug("Opus-MT: '%s' → '%s'", zh_text, en_text)

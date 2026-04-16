@@ -12,6 +12,20 @@
     --radius: 8px;
 }
 
+/* ===================== Material Icons ===================== */
+.material-icons {
+    font-size: inherit;
+    vertical-align: middle;
+    line-height: 1;
+}
+
+/* Dropdown menu items: icon + text side by side */
+.chapter-dropdown .material-icons {
+    font-size: 18px;
+    margin-right: 0.4rem;
+    vertical-align: -3px;
+}
+
 /* ===================== Reset & Base ===================== */
 *, *::before, *::after {
     box-sizing: border-box;
@@ -143,6 +157,43 @@ header button {
 
 .btn-delete-novel:hover {
     color: var(--accent);
+}
+
+/* ===================== Chapters Header (two-row) ===================== */
+.chapters-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+}
+
+.chapters-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.chapters-header h1 {
+    margin-top: 0.4rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Hide-read toggle */
+.btn-toggle-read {
+    background: var(--border) !important;
+    font-size: 1rem !important;
+    padding: 0.5rem 0.6rem !important;
+    line-height: 1;
+}
+
+.btn-toggle-read:hover {
+    background: var(--accent) !important;
+}
+
+.btn-toggle-read.active {
+    background: var(--accent) !important;
+    opacity: 0.8;
 }
 
 /* ===================== Chapter List ===================== */
@@ -599,25 +650,207 @@ header button {
     cursor: default;
 }
 
-/* ===================== Chapter Actions ===================== */
+/* ===================== Chapter Actions (Dropdown) ===================== */
 .chapter-actions {
-    display: flex;
-    gap: 0.25rem;
+    position: relative;
     flex-shrink: 0;
 }
 
-.chapter-actions button {
+.btn-ch-menu {
     background: none;
     border: none;
     color: var(--text-secondary);
     cursor: pointer;
-    padding: 0.25rem;
-    font-size: 0.9rem;
+    padding: 0.25rem 0.5rem;
+    font-size: 1.2rem;
     border-radius: var(--radius);
+    line-height: 1;
+    letter-spacing: 1px;
 }
 
-.chapter-actions button:hover {
+.btn-ch-menu:hover {
     color: var(--accent);
+}
+
+.chapter-dropdown {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: 100%;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    min-width: 160px;
+    z-index: 100;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+}
+
+.chapter-dropdown.open {
+    display: block;
+}
+
+.chapter-dropdown button {
+    display: block;
+    width: 100%;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    padding: 0.6rem 0.85rem;
+    font-size: 0.85rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.chapter-dropdown button:hover {
+    background: var(--bg-card);
+    color: var(--accent);
+}
+
+.chapter-dropdown button.destructive:hover {
+    color: #ff4444;
+}
+
+/* ===================== Queue View ===================== */
+#queue-list {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.btn-queue {
+    background: var(--border) !important;
+    font-size: 1rem !important;
+    padding: 0.5rem 0.6rem !important;
+}
+
+.btn-queue:hover {
+    background: var(--accent) !important;
+}
+
+.queue-item {
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.queue-item.active {
+    border-left: 3px solid var(--accent);
+}
+
+.queue-item.sortable-ghost {
+    opacity: 0.4;
+}
+
+.queue-item.sortable-chosen {
+    background: var(--bg-secondary);
+}
+
+.queue-item.sortable-fallback {
+    background: var(--bg-card);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    opacity: 1 !important;
+}
+
+.queue-drag-handle {
+    color: var(--text-secondary);
+    cursor: grab;
+    font-size: 1.25rem;
+    padding: 0.25rem;
+    user-select: none;
+    flex-shrink: 0;
+    line-height: 1;
+}
+
+.queue-drag-handle:active {
+    cursor: grabbing;
+}
+
+.queue-item-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.queue-item-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.queue-item-status {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-top: 0.15rem;
+}
+
+.queue-item-bar {
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: 0.4rem;
+}
+
+.queue-item-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.3s ease;
+}
+
+.queue-item.paused {
+    opacity: 0.6;
+}
+
+.queue-item.paused .queue-item-bar-fill {
+    background: var(--text-secondary);
+}
+
+.btn-queue-pause {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--radius);
+    line-height: 1;
+    flex-shrink: 0;
+    transition: color 0.2s, border-color 0.2s;
+    min-width: 2rem;
+    text-align: center;
+}
+
+.btn-queue-pause:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+.btn-queue-remove {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 1.25rem;
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--radius);
+    line-height: 1;
+    flex-shrink: 0;
+    transition: color 0.2s;
+}
+
+.btn-queue-remove:hover {
+    color: var(--accent);
+}
+
+.queue-empty {
+    color: var(--text-secondary);
+    text-align: center;
+    padding: 2rem;
 }
 
 /* ===================== Desktop Layout ===================== */
@@ -633,12 +866,14 @@ header button {
     }
 
     #chapters-view,
-    #settings-view {
+    #settings-view,
+    #queue-view {
         flex: 1;
         min-width: 0;
     }
 
-    #btn-back-library {
+    #btn-back-library,
+    #btn-back-from-queue {
         display: none;
     }
 }

@@ -2,7 +2,7 @@
  * Service Worker for offline caching of audio files and app shell.
  */
 
-const CACHE_NAME = "audiobook-cache-v2";
+const CACHE_NAME = "audiobook-cache-v4";
 const APP_SHELL = ["/", "/index.html", "/app.js", "/styles.css", "/manifest.json"];
 
 // ===================== Install =====================

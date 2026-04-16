@@ -47,7 +47,7 @@ def main():
 
     # Load config to display broker URL dynamically
     import yaml
-    with open("config.worker.yaml") as f:
+    with open("config.worker.yaml", encoding="utf-8") as f:
         worker_cfg = yaml.safe_load(f)
     broker_url = worker_cfg.get("celery", {}).get("broker_url", "unknown")
 

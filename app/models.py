@@ -38,6 +38,11 @@ class TermDictionaryUpdate(BaseModel):
     entries: dict  # {"characters": {...}, "locations": {...}, "terms": {...}}
 
 
+class QueueReorderRequest(BaseModel):
+    """Reorder the processing queue."""
+    novel_ids: list[str]  # Ordered list of novel IDs (first = highest priority)
+
+
 # ===================== Response Schemas =====================
 
 class NovelResponse(BaseModel):
@@ -49,6 +54,8 @@ class NovelResponse(BaseModel):
     total_chapters: int = 0
     processed_chapters: int = 0
     status: str = "pending"
+    queue_position: int | None = None
+    queue_status: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -82,6 +89,16 @@ class PlaybackStateResponse(BaseModel):
     position_seconds: float = 0
     playback_speed: float = 2.0
     updated_at: datetime | None = None
+
+
+class QueueItemResponse(BaseModel):
+    novel_id: str
+    title: str
+    queue_position: int
+    queue_status: str
+    total_chapters: int = 0
+    processed_chapters: int = 0
+    scraped_chapters: int = 0
 
 
 class TermDictionaryResponse(BaseModel):

@@ -61,6 +61,9 @@ class KokoroTTS(TTSEngine):
         self._pipeline = None
 
     def load_model(self) -> None:
+        # Suppress noisy "words count mismatch" warnings from phonemizer/espeak
+        logging.getLogger("phonemizer").setLevel(logging.ERROR)
+
         from kokoro import KPipeline
 
         cfg = settings.tts

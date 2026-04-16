@@ -8,6 +8,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>Light Novel Audiobooks</title>
     <link rel="manifest" href="manifest.json">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -17,9 +18,10 @@
         <header>
             <h1>My Light Novels</h1>
             <div style="display: flex; gap: 0.5rem;">
-                <button id="btn-sort-novels" class="btn-sort" aria-label="Sort novels" title="Sort novels">&#x2195;</button>
-                <button id="btn-settings" aria-label="Settings" title="Voice settings">&#9881;</button>
-                <button id="btn-request-novel" aria-label="Request new novel">+</button>
+                <button id="btn-sort-novels" class="btn-sort" aria-label="Sort novels" title="Sort novels"><span class="material-icons">swap_vert</span></button>
+                <button id="btn-queue" class="btn-queue" aria-label="Processing queue" title="Processing queue"><span class="material-icons">queue_music</span></button>
+                <button id="btn-settings" aria-label="Settings" title="Voice settings"><span class="material-icons">settings</span></button>
+                <button id="btn-request-novel" aria-label="Request new novel"><span class="material-icons">add</span></button>
             </div>
         </header>
         <!-- Resume listening banner -->
@@ -29,7 +31,7 @@
                 <span id="resume-detail"></span>
             </div>
             <button id="btn-resume-listening">Resume</button>
-            <button id="btn-dismiss-resume" aria-label="Dismiss">&times;</button>
+            <button id="btn-dismiss-resume" aria-label="Dismiss"><span class="material-icons">close</span></button>
         </div>
         <div id="novel-list" class="content">
             <!-- Novel cards rendered by app.js -->
@@ -38,15 +40,18 @@
 
     <!-- Chapter List View -->
     <div id="chapters-view" class="view">
-        <header>
-            <button id="btn-back-library" aria-label="Back to library">&larr;</button>
-            <h1 id="chapters-title"><a id="chapters-title-link" href="#" target="_blank" rel="noopener">Novel Title</a></h1>
-            <div style="display: flex; gap: 0.5rem;">
-                <button id="btn-sort-chapters" class="btn-sort" aria-label="Sort chapters" title="Sort chapters">&#x2195;</button>
-                <button id="btn-rename-novel" aria-label="Rename novel" title="Rename novel">&#9998;</button>
-                <button id="btn-add-chapters" aria-label="Download more chapters" title="Download more chapters">+</button>
-                <button id="btn-check-updates" aria-label="Check for new chapters" title="Check for new chapters">&#x21bb;</button>
+        <header class="chapters-header">
+            <div class="chapters-header-row">
+                <button id="btn-back-library" aria-label="Back to library"><span class="material-icons">arrow_back</span></button>
+                <div style="display: flex; gap: 0.5rem;">
+                    <button id="btn-hide-read" class="btn-toggle-read" aria-label="Hide read chapters" title="Hide read chapters"><span class="material-icons">visibility</span></button>
+                    <button id="btn-sort-chapters" class="btn-sort" aria-label="Sort chapters" title="Sort chapters"><span class="material-icons">swap_vert</span></button>
+                    <button id="btn-rename-novel" aria-label="Rename novel" title="Rename novel"><span class="material-icons">edit</span></button>
+                    <button id="btn-add-chapters" aria-label="Download more chapters" title="Download more chapters"><span class="material-icons">add</span></button>
+                    <button id="btn-check-updates" aria-label="Check for new chapters" title="Check for new chapters"><span class="material-icons">refresh</span></button>
+                </div>
             </div>
+            <h1 id="chapters-title"><a id="chapters-title-link" href="#" target="_blank" rel="noopener">Novel Title</a></h1>
         </header>
         <div id="job-status" class="hidden">
             <!-- Active job progress rendered by app.js -->
@@ -56,10 +61,21 @@
         </div>
     </div>
 
+    <!-- Queue View -->
+    <div id="queue-view" class="view">
+        <header>
+            <button id="btn-back-from-queue" aria-label="Back to library"><span class="material-icons">arrow_back</span></button>
+            <h1>Processing Queue</h1>
+        </header>
+        <div id="queue-list" class="content">
+            <!-- Queue items rendered by app.js -->
+        </div>
+    </div>
+
     <!-- Settings/Voice View -->
     <div id="settings-view" class="view">
         <header>
-            <button id="btn-back-from-settings" aria-label="Back to library">&larr;</button>
+            <button id="btn-back-from-settings" aria-label="Back to library"><span class="material-icons">arrow_back</span></button>
             <h1>Voice Settings</h1>
         </header>
         <p id="current-voice-label" style="color: var(--text-secondary); margin-bottom: 1rem;"></p>
@@ -127,11 +143,11 @@
             </div>
         </div>
         <div class="player-controls">
-            <button id="btn-prev-chapter" aria-label="Previous chapter">&#9198;</button>
-            <button id="btn-skip-back" aria-label="Skip back 15s">-15</button>
-            <button id="btn-play-pause" aria-label="Play/Pause">&#9654;</button>
-            <button id="btn-skip-forward" aria-label="Skip forward 15s">+15</button>
-            <button id="btn-next-chapter" aria-label="Next chapter">&#9197;</button>
+            <button id="btn-prev-chapter" aria-label="Previous chapter"><span class="material-icons">skip_previous</span></button>
+            <button id="btn-skip-back" aria-label="Skip back 15s"><span class="material-icons">replay_10</span></button>
+            <button id="btn-play-pause" aria-label="Play/Pause"><span class="material-icons">play_arrow</span></button>
+            <button id="btn-skip-forward" aria-label="Skip forward 15s"><span class="material-icons">forward_10</span></button>
+            <button id="btn-next-chapter" aria-label="Next chapter"><span class="material-icons">skip_next</span></button>
         </div>
         <div class="player-speed">
             <label for="speed-control">Speed:</label>
@@ -143,6 +159,19 @@
     <!-- Hidden audio element -->
     <audio id="audio-player" preload="auto"></audio>
 
+    <script src="sortable.min.js"></script>
+    <script>
+        if (typeof Sortable === "undefined") {
+            console.warn("SortableJS not loaded from local file, trying CDN...");
+            var s = document.createElement("script");
+            s.src = "https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js";
+            s.onload = function() { console.log("SortableJS loaded from CDN"); };
+            s.onerror = function() { console.error("FATAL: SortableJS failed to load from CDN too"); };
+            document.head.appendChild(s);
+        } else {
+            console.log("SortableJS v" + Sortable.version + " loaded");
+        }
+    </script>
     <script src="app.js"></script>
 </body>
 </html>

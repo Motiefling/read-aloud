@@ -11,6 +11,7 @@ from app.api.jobs import router as jobs_router
 from app.api.dictionaries import router as dictionaries_router
 from app.api.settings import router as settings_router
 from app.api.websocket import router as websocket_router
+from app.api.queue import router as queue_router
 
 
 @asynccontextmanager
@@ -28,6 +29,9 @@ async def _mark_stale_jobs_interrupted():
     (the queue was purged on startup). The user must manually retry them.
     """
     from app.database import get_db
+
+    import logging
+    log = logging.getLogger(__name__)
 
     db = await get_db()
     try:
@@ -48,10 +52,34 @@ async def _mark_stale_jobs_interrupted():
                 "WHERE status IN ('processing', 'scraped')"
             )
             await db.commit()
-        import logging
-        logging.getLogger(__name__).info(
+        log.info(
             "Marked %d stale jobs as interrupted on startup", cursor.rowcount
         )
+
+        # Reset 'active' novels back to 'queued' so the dispatcher picks them up
+        cursor = await db.execute(
+            "UPDATE novels SET queue_status = 'queued', "
+            "updated_at = CURRENT_TIMESTAMP "
+            "WHERE queue_status = 'active'"
+        )
+        if cursor.rowcount > 0:
+            await db.commit()
+            log.info(
+                "Reset %d active-queue novels to queued on startup",
+                cursor.rowcount,
+            )
+
+        # Clear 'scraping' novels that didn't finish (server-side scrape was interrupted)
+        cursor = await db.execute(
+            "UPDATE novels SET queue_status = 'queued', "
+            "updated_at = CURRENT_TIMESTAMP "
+            "WHERE queue_status = 'scraping'"
+        )
+        if cursor.rowcount > 0:
+            await db.commit()
+            log.info(
+                "Reset %d scraping novels on startup", cursor.rowcount,
+            )
     finally:
         await db.close()
 
@@ -69,6 +97,7 @@ app.include_router(chapters_router, prefix="/api/novels", tags=["chapters"])
 app.include_router(jobs_router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(dictionaries_router, prefix="/api/dictionaries", tags=["dictionaries"])
 app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
+app.include_router(queue_router, prefix="/api/queue", tags=["queue"])
 app.include_router(websocket_router, tags=["websocket"])
 
 # --- Serve PWA static files ---

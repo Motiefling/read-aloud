@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS novels (
     processed_chapters INTEGER DEFAULT 0,
     cover_image_path TEXT,
     status TEXT DEFAULT 'pending',
+    queue_position INTEGER DEFAULT NULL,
+    queue_status TEXT DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -81,9 +83,20 @@ async def init_db() -> None:
         await db.executescript(SQL_CREATE_TABLES)
         # Migrations for existing databases
         cursor = await db.execute("PRAGMA table_info(chapters)")
-        columns = {row[1] for row in await cursor.fetchall()}
-        if "title_english" not in columns:
+        ch_columns = {row[1] for row in await cursor.fetchall()}
+        if "title_english" not in ch_columns:
             await db.execute("ALTER TABLE chapters ADD COLUMN title_english TEXT")
+
+        cursor = await db.execute("PRAGMA table_info(novels)")
+        novel_columns = {row[1] for row in await cursor.fetchall()}
+        if "queue_position" not in novel_columns:
+            await db.execute(
+                "ALTER TABLE novels ADD COLUMN queue_position INTEGER DEFAULT NULL"
+            )
+        if "queue_status" not in novel_columns:
+            await db.execute(
+                "ALTER TABLE novels ADD COLUMN queue_status TEXT DEFAULT NULL"
+            )
 
         # Migrate paths from BASE_DIR-relative (data\novels\... or data/novels/...)
         # to data_dir-relative (novels\...) for portable data directory support
