@@ -1,11 +1,10 @@
-import uuid as _uuid
-
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from app.config import get_data_dir
 from app.database import get_db
 from app.models import ChapterResponse, PlaybackStateUpdate, PlaybackStateResponse, RenameRequest
+from app.queue_signal import notify_queue_changed
 
 router = APIRouter()
 
@@ -111,8 +110,8 @@ async def delete_chapter(novel_id: str, chapter_num: int):
 
 @router.post("/{novel_id}/chapters/{chapter_num}/retry")
 async def retry_chapter(novel_id: str, chapter_num: int):
-    """Retry translate + TTS for a single error chapter."""
-    from app.pipeline.tasks import retry_chapter_task
+    """Retry translate + TTS for a single chapter by resetting it to 'scraped'
+    and ensuring the novel is queued, so the dispatcher picks it up next."""
     from app.pipeline.chapter_storage import has_zh
 
     db = await get_db()
@@ -130,24 +129,32 @@ async def retry_chapter(novel_id: str, chapter_num: int):
         if not has_zh(novel_id, chapter_num):
             raise HTTPException(400, "Chapter has no Chinese text file to process")
 
-        chapter_id = row["id"]
-
-        # Create a job to track this retry
-        job_id = str(_uuid.uuid4())
         await db.execute(
-            "INSERT INTO jobs (id, novel_id, job_type, status, current_step) "
-            "VALUES (?, ?, 'retry_chapter', 'queued', ?)",
-            (job_id, novel_id, f"Queued — retrying chapter {chapter_num}"),
+            "UPDATE chapters SET status = 'scraped' WHERE id = ?", (row["id"],),
         )
+
+        # Make sure the novel is in the queue so the dispatcher picks this up.
+        cursor = await db.execute(
+            "SELECT queue_position FROM novels WHERE id = ?", (novel_id,),
+        )
+        novel_row = await cursor.fetchone()
+        if novel_row and novel_row["queue_position"] is None:
+            cursor = await db.execute(
+                "SELECT COALESCE(MAX(queue_position), 0) + 1 as next_pos FROM novels"
+            )
+            next_pos = (await cursor.fetchone())["next_pos"]
+            await db.execute(
+                "UPDATE novels SET queue_position = ?, queue_status = 'queued', "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (next_pos, novel_id),
+            )
+
         await db.commit()
     finally:
         await db.close()
 
-    retry_chapter_task.apply_async(
-        args=[job_id, novel_id, chapter_id], task_id=job_id,
-    )
-
-    return {"job_id": job_id, "status": "queued"}
+    notify_queue_changed()
+    return {"status": "queued"}
 
 
 @router.get("/{novel_id}/chapters/{chapter_num}/audio")

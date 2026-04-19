@@ -122,6 +122,19 @@ class CelerySettings(BaseModel):
     result_backend: str = "redis://localhost:6379/0"
 
 
+# --------------- Internal API Settings ---------------
+
+class InternalApiSettings(BaseModel):
+    """Worker-side settings for talking to the FastAPI server's /internal/* endpoints.
+
+    The worker machine is typically remote from the FastAPI server (different
+    host, reached over Tailscale), so base_url must point to the reachable
+    server address.
+    """
+    base_url: str = "http://localhost:8800"
+    request_timeout_seconds: float = 30.0
+
+
 # --------------- Aggregate Config ---------------
 
 class AppConfig(BaseModel):
@@ -130,6 +143,7 @@ class AppConfig(BaseModel):
     tts: TTSSettings = TTSSettings()
     server: ServerSettings = ServerSettings()
     celery: CelerySettings = CelerySettings()
+    internal_api: InternalApiSettings = InternalApiSettings()
 
     @classmethod
     def from_yaml(cls, config_path: Path | None = None) -> "AppConfig":
@@ -144,6 +158,7 @@ class AppConfig(BaseModel):
             tts=TTSSettings(**raw.get("tts", {})),
             server=ServerSettings(**raw.get("server", {})),
             celery=CelerySettings(**raw.get("celery", {})),
+            internal_api=InternalApiSettings(**raw.get("internal_api", {})),
         )
 
 

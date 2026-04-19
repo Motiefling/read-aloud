@@ -12,6 +12,7 @@ from app.api.dictionaries import router as dictionaries_router
 from app.api.settings import router as settings_router
 from app.api.websocket import router as websocket_router
 from app.api.queue import router as queue_router
+from app.api.internal import router as internal_router
 
 
 @asynccontextmanager
@@ -98,6 +99,7 @@ app.include_router(jobs_router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(dictionaries_router, prefix="/api/dictionaries", tags=["dictionaries"])
 app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 app.include_router(queue_router, prefix="/api/queue", tags=["queue"])
+app.include_router(internal_router, prefix="/internal", tags=["internal"])
 app.include_router(websocket_router, tags=["websocket"])
 
 # --- Serve PWA static files ---
