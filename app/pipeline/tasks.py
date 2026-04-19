@@ -85,6 +85,7 @@ def _translate_and_tts_chapter(
     from app.pipeline.translator import TranslationError
     from app.pipeline.tts import generate_chapter_audio, TTSError
     from app.pipeline.audio_processing import get_audio_duration
+    from app.pipeline.chapter_storage import write_en
 
     # --- Translate ---
     try:
@@ -99,10 +100,11 @@ def _translate_and_tts_chapter(
             chapter_number, translate_elapsed,
             len(chinese_text), len(english_text),
         )
+        write_en(novel_id, chapter_number, english_text)
         conn.execute(
-            "UPDATE chapters SET english_text = ?, title_english = ?, "
-            "status = 'translated' WHERE id = ?",
-            (english_text, title_english, chapter_id),
+            "UPDATE chapters SET title_english = ?, status = 'translated' "
+            "WHERE id = ?",
+            (title_english, chapter_id),
         )
         conn.commit()
     except TranslationError:
@@ -167,11 +169,11 @@ def _translate_and_tts_chapter(
 def _pick_next_chapter(conn):
     """Find the next chapter to process based on novel queue order.
 
-    Returns a Row with (id, novel_id, chapter_number, chinese_text, title)
+    Returns a Row with (id, novel_id, chapter_number, title)
     or None if no work is available.
     """
     return conn.execute(
-        "SELECT c.id, c.novel_id, c.chapter_number, c.chinese_text, c.title "
+        "SELECT c.id, c.novel_id, c.chapter_number, c.title "
         "FROM chapters c "
         "JOIN novels n ON c.novel_id = n.id "
         "WHERE n.queue_position IS NOT NULL "
@@ -377,10 +379,24 @@ def dispatcher_loop(self):
                 novel_id, chapter_number, already_ready, total_scraped,
             )
 
+            from app.pipeline.chapter_storage import read_zh
+
+            chinese_text = read_zh(novel_id, chapter_number)
+            if not chinese_text:
+                logger.error(
+                    "Chapter %s (#%d) has no .zh.txt on disk — marking error",
+                    chapter_id, chapter_number,
+                )
+                conn.execute(
+                    "UPDATE chapters SET status = 'error' WHERE id = ?", (chapter_id,)
+                )
+                conn.commit()
+                continue
+
             ch_start = time.time()
             success = _translate_and_tts_chapter(
                 conn, chapter_id, chapter_number,
-                chapter["chinese_text"], chapter["title"],
+                chinese_text, chapter["title"],
                 novel_id, translator, _cached_term_dict, tts_engine, output_dir,
             )
 

@@ -120,8 +120,14 @@ async def scrape_and_store(
             )
             existing = await cursor.fetchone()
 
+            from app.pipeline.chapter_storage import write_zh
+
             ch_title = chapter_dict.get("title", "")
-            ch_text_len = len(chapter_dict.get("chinese_text", ""))
+            chinese_text = chapter_dict.get("chinese_text", "") or ""
+            ch_text_len = len(chinese_text)
+
+            # Write Chinese text to disk first — idempotent, safe to re-run
+            write_zh(novel_id, ch_num, chinese_text)
 
             if existing:
                 if existing["status"] in ("audio_ready", "translated"):
@@ -129,10 +135,10 @@ async def scrape_and_store(
                     return  # Already processed, skip
                 # Re-scrape into existing row
                 await db.execute(
-                    "UPDATE chapters SET title = ?, source_url = ?, chinese_text = ?, "
-                    "status = 'scraped' WHERE id = ?",
+                    "UPDATE chapters SET title = ?, source_url = ?, status = 'scraped' "
+                    "WHERE id = ?",
                     (chapter_dict.get("title"), chapter_dict.get("source_url"),
-                     chapter_dict.get("chinese_text"), existing["id"]),
+                     existing["id"]),
                 )
                 logger.info(
                     "Re-scraped chapter %d: %s (%d chars)",
@@ -141,9 +147,9 @@ async def scrape_and_store(
             else:
                 await db.execute(
                     "INSERT INTO chapters (id, novel_id, chapter_number, title, "
-                    "source_url, chinese_text, status) VALUES (?, ?, ?, ?, ?, ?, 'scraped')",
+                    "source_url, status) VALUES (?, ?, ?, ?, ?, 'scraped')",
                     (chapter_id, novel_id, ch_num, chapter_dict.get("title"),
-                     chapter_dict.get("source_url"), chapter_dict.get("chinese_text")),
+                     chapter_dict.get("source_url")),
                 )
                 logger.info(
                     "Scraped chapter %d: %s (%d chars)",

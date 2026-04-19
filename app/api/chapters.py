@@ -69,8 +69,9 @@ async def rename_chapter(novel_id: str, chapter_num: int, request: RenameRequest
 
 @router.delete("/{novel_id}/chapters/{chapter_num}")
 async def delete_chapter(novel_id: str, chapter_num: int):
-    """Delete a single chapter and its audio file."""
+    """Delete a single chapter and its audio + text files."""
     import os
+    from app.pipeline.chapter_storage import delete_chapter_text
 
     db = await get_db()
     try:
@@ -102,6 +103,9 @@ async def delete_chapter(novel_id: str, chapter_num: int):
         if full_path.exists():
             os.remove(full_path)
 
+    # Clean up chapter text files (.zh.txt / .en.txt)
+    delete_chapter_text(novel_id, chapter_num)
+
     return {"status": "deleted"}
 
 
@@ -109,11 +113,12 @@ async def delete_chapter(novel_id: str, chapter_num: int):
 async def retry_chapter(novel_id: str, chapter_num: int):
     """Retry translate + TTS for a single error chapter."""
     from app.pipeline.tasks import retry_chapter_task
+    from app.pipeline.chapter_storage import has_zh
 
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, status, chinese_text FROM chapters "
+            "SELECT id, status FROM chapters "
             "WHERE novel_id = ? AND chapter_number = ?",
             (novel_id, chapter_num),
         )
@@ -122,8 +127,8 @@ async def retry_chapter(novel_id: str, chapter_num: int):
             raise HTTPException(404, "Chapter not found")
         if row["status"] not in ("error", "scraped", "audio_ready", "translated"):
             raise HTTPException(400, f"Chapter is {row['status']}, not retryable")
-        if not row["chinese_text"]:
-            raise HTTPException(400, "Chapter has no Chinese text to process")
+        if not has_zh(novel_id, chapter_num):
+            raise HTTPException(400, "Chapter has no Chinese text file to process")
 
         chapter_id = row["id"]
 

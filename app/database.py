@@ -27,8 +27,6 @@ CREATE TABLE IF NOT EXISTS chapters (
     title TEXT,
     title_english TEXT,
     source_url TEXT,
-    chinese_text TEXT,
-    english_text TEXT,
     audio_path TEXT,
     audio_duration_seconds REAL,
     audio_file_size_bytes INTEGER,
