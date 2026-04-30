@@ -32,7 +32,8 @@ def write_zh(novel_id: str, chapter_number: int, text: str) -> None:
 
 def write_en(novel_id: str, chapter_number: int, text: str) -> None:
     p = en_path(novel_id, chapter_number)
-    p.parent.mkdir(parents=True, exist_ok=True)
+    if not p.parent.is_dir():
+       p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text or "", encoding="utf-8")
 
 

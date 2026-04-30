@@ -47,11 +47,18 @@ def update_novel_title(novel_id: str, title: str) -> None:
         r.raise_for_status()
 
 
-def mark_chapter_translated(chapter_id: str, title_english: str | None) -> None:
+def mark_chapter_translated(
+    chapter_id: str,
+    title_english: str | None,
+    pre_replacements_hash: str | None = None,
+) -> None:
     with _client() as c:
         r = c.patch(
             f"/internal/chapters/{chapter_id}/translated",
-            json={"title_english": title_english},
+            json={
+                "title_english": title_english,
+                "pre_replacements_hash": pre_replacements_hash,
+            },
         )
         r.raise_for_status()
 
@@ -61,6 +68,7 @@ def mark_chapter_audio_ready(
     audio_path: str,
     duration_seconds: float,
     file_size_bytes: int,
+    post_replacements_hash: str | None = None,
 ) -> dict:
     with _client() as c:
         r = c.patch(
@@ -69,10 +77,24 @@ def mark_chapter_audio_ready(
                 "audio_path": audio_path,
                 "duration_seconds": duration_seconds,
                 "file_size_bytes": file_size_bytes,
+                "post_replacements_hash": post_replacements_hash,
             },
         )
         r.raise_for_status()
         return r.json()
+
+
+def get_replacements(novel_id: str, kind: str) -> tuple[list[tuple[str, str]], str]:
+    """Fetch the active rule list (novel-scoped + global) plus its hash.
+
+    ``kind`` is ``"pre"`` or ``"post"``.  Returns ``([(find, replace)...], hash)``.
+    """
+    with _client() as c:
+        r = c.get(f"/internal/novels/{novel_id}/replacements/{kind}")
+        r.raise_for_status()
+        data = r.json()
+    rules = [(row["find_text"], row["replace_text"] or "") for row in data["rules"]]
+    return rules, data["hash"]
 
 
 def mark_chapter_error(chapter_id: str) -> None:

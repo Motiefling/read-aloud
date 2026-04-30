@@ -41,10 +41,10 @@ async def request_novel(request: NovelRequest):
         next_pos = (await cursor.fetchone())["next_pos"]
 
         await db.execute(
-            "INSERT INTO novels (id, title, source_url, dictionary_id, status, "
+            "INSERT INTO novels (id, title, source_url, status, "
             "queue_position, queue_status) "
-            "VALUES (?, ?, ?, ?, 'pending', ?, 'scraping')",
-            (novel_id, title, request.url, request.dictionary_id, next_pos),
+            "VALUES (?, ?, ?, 'pending', ?, 'scraping')",
+            (novel_id, title, request.url, next_pos),
         )
         await db.execute(
             "INSERT INTO jobs (id, novel_id, job_type, status, current_step) "
@@ -72,7 +72,7 @@ async def list_novels():
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, title, source_url, dictionary_id, cover_image_path, total_chapters, "
+            "SELECT id, title, source_url, cover_image_path, total_chapters, "
             "processed_chapters, status, queue_position, queue_status, created_at, updated_at "
             "FROM novels ORDER BY created_at DESC"
         )
@@ -88,7 +88,7 @@ async def get_novel(novel_id: str):
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, title, source_url, dictionary_id, cover_image_path, total_chapters, "
+            "SELECT id, title, source_url, cover_image_path, total_chapters, "
             "processed_chapters, status, queue_position, queue_status, created_at, updated_at "
             "FROM novels WHERE id = ?",
             (novel_id,),

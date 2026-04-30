@@ -1,6 +1,6 @@
 # Read Aloud
 
-Chinese light novel to English audiobook pipeline. Scrapes novels from supported sites, translates Chinese to English using Opus-MT, generates speech with Kokoro TTS, and serves everything via a FastAPI + PWA interface.
+Chinese light novel to English audiobook pipeline. Scrapes novels from supported sites, translates Chinese to English using Qwen 2.5 7B Instruct (with an Opus-MT safety net), generates speech with Kokoro TTS, and serves everything via a FastAPI + PWA interface.
 
 ## Project Board
 
@@ -12,11 +12,13 @@ The full end-to-end pipeline is working: scrape → translate → TTS → audio.
 
 **Working:**
 - **Web scraper** — multi-site support with per-domain CSS selector profiles (funs.me implemented, ttkan.co placeholder)
-- **Translation** — Opus-MT (`Helsinki-NLP/opus-mt-zh-en`) via HuggingFace Transformers, with Traditional→Simplified Chinese conversion (OpenCC), term dictionary post-processing, and Chinese name annotation for TTS
+- **Translation** — Qwen 2.5 7B Instruct via HuggingFace Transformers, with Traditional→Simplified Chinese conversion (OpenCC) and an Opus-MT safety net for any Chinese the model leaves untranslated
 - **TTS** — Kokoro (`kokoro` package) with 25 English voices (American and British, male and female), voice preview, and voice selection via API
+- **User-managed find/replace** — two scopes: pre-translation rules rewrite the Chinese source before Qwen sees it (handy for pinning English placeholders so Qwen passes them through verbatim); post-translation rules rewrite the English output before Kokoro reads it (handy for fixing TTS mispronunciations like `feng shui → fĕng shwā'`). Each rule can be scoped to one novel or set as global. Whole-word case-insensitive matching for the post rules; plain longest-first substring for the pre rules.
+- **Re-process TTS** — per-chapter "regenerate audio only" path that skips Qwen and reuses the existing English text with the latest TTS rules. Chapters whose stored rule-set hash diverges from the current one are flagged with a stale icon in the chapter list.
 - **Audio processing** — WAV→MP3 conversion via FFmpeg, playback speed adjustment, duration detection
 - **Celery pipeline** — full orchestration (scrape → translate → TTS) with progress tracking, plus individual tasks for scraping, translation, and audio generation
-- **API** — fully implemented REST endpoints for novels (CRUD, update/add chapters), chapters (list, audio streaming), jobs (status/progress), dictionaries (CRUD), settings (voice list/select/preview), and WebSocket for real-time updates
+- **API** — REST endpoints for novels (CRUD, update/add chapters), chapters (list, audio streaming, re-process TTS), jobs (status/progress), find/replace rules (pre + post, per-novel + global), settings (voice list/select/preview), and WebSocket for real-time updates
 - **PWA frontend** — vanilla HTML/CSS/JS with Service Worker for offline support
 - **One-command launcher** — `python start.py` starts Redis, Celery, and FastAPI together
 
@@ -87,22 +89,22 @@ app/
   database.py          # SQLite via aiosqlite
   api/
     novels.py          # Novel CRUD + pipeline triggers
-    chapters.py        # Chapter listing + audio streaming
+    chapters.py        # Chapter listing, audio streaming, re-process-TTS
     jobs.py            # Job status and progress
-    dictionaries.py    # Term dictionary management
+    replacements.py    # User find/replace rules (pre + post translation)
     settings.py        # Voice list, preview, and selection
     websocket.py       # Real-time job updates
   pipeline/
     scraper.py         # Multi-site web scraper
-    translator.py      # Opus-MT translation with OpenCC + term dict
+    translator.py      # Qwen 2.5 translation with OpenCC + Opus-MT fallback
     tts.py             # Kokoro TTS engine + chapter audio generation
     audio_processing.py # FFmpeg: MP3 conversion, speed adjust, duration
     tasks.py           # Celery tasks: full pipeline, scrape, translate, TTS
   utils/
     chinese_detect.py
-    term_dictionary.py
+    replacements.py    # Apply pre/post rules + stable rule-set hash
 pwa/                   # Vanilla PWA frontend (HTML/CSS/JS, Service Worker)
-data/                  # Runtime data (novels, dictionaries, SQLite DB)
+data/                  # Runtime data (novels, SQLite DB)
 config.yaml
 docker-compose.yml     # Redis only (app runs on host for GPU access)
 start.py               # One-command launcher (Redis + Celery + FastAPI)

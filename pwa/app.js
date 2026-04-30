@@ -17,6 +17,12 @@ let novels = [];
 let currentNovel = null;
 let chapters = [];
 let currentChapter = null;
+// Playback state — the novel/chapter list that's actually playing audio.
+// Distinct from currentNovel/chapters (which track what's being *viewed*) so
+// autoplay, mark-as-read, media session, and position saves don't get
+// hijacked when the user navigates to a different novel mid-playback.
+let playingNovel = null;
+let playingChapters = [];
 let ws = null;
 let playbackSaveTimer = null;
 let listenedChapters = loadListenedChapters(); // { novelId: [chapterNumbers] }
@@ -419,6 +425,11 @@ async function loadChapters(novelId) {
         const res = await fetch(`${API_BASE}/novels/${novelId}/chapters`);
         if (!res.ok) return;
         chapters = await res.json();
+        // Keep the playing playlist in sync so newly-ready chapters become
+        // eligible for autoplay if we're refreshing the currently-playing novel.
+        if (playingNovel && playingNovel.id === novelId) {
+            playingChapters = chapters;
+        }
         renderChapterList();
     } catch (e) {
         console.error("Failed to load chapters:", e);
@@ -470,9 +481,18 @@ function renderChapterList() {
 
         const listenedIcon = listened ? '<span class="material-icons chapter-listened-icon" title="Listened">check_circle</span>' : "";
 
+        let staleIcon = "";
+        if (isReady && (ch.translation_stale || ch.audio_stale)) {
+            const reason = ch.translation_stale
+                ? "Translation rules changed since this chapter was processed"
+                : "TTS rules changed since this chapter's audio was generated";
+            staleIcon = `<span class="material-icons chapter-stale-icon" title="${reason}">sync_problem</span>`;
+        }
+
         item.innerHTML =
             `<span class="chapter-number">${ch.chapter_number}</span>` +
             `<span class="chapter-title">${escapeHtml(chTitle)}</span>` +
+            `${staleIcon}` +
             `${listenedIcon}` +
             `<span class="chapter-status${isPlaying ? " playing" : ""}">${isReady ? statusLabel : ch.status}</span>` +
             `<span class="chapter-actions">` +
@@ -532,7 +552,7 @@ function renderChapterList() {
             btnRename.addEventListener("click", async (e) => {
                 e.stopPropagation();
                 dropdown.classList.remove("open");
-                const newTitle = prompt("Rename chapter:", ch.title || `Chapter ${ch.chapter_number}`);
+                const newTitle = prompt("Rename chapter:", ch.title_english || ch.title || `Chapter ${ch.chapter_number}`);
                 if (newTitle === null || newTitle.trim() === "") return;
                 try {
                     const res = await fetch(
@@ -540,13 +560,13 @@ function renderChapterList() {
                         { method: "PATCH", headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({ title: newTitle.trim() }) },
                     );
-                    if (res.ok) { ch.title = newTitle.trim(); renderChapterList(); }
+                    if (res.ok) { ch.title_english = newTitle.trim(); renderChapterList(); }
                 } catch (err) { console.error("Failed to rename chapter:", err); }
             });
             dropdown.appendChild(btnRename);
         }
 
-        // Re-process (audio_ready only)
+        // Re-process (audio_ready only) — full re-translate + re-TTS
         if (isReady) {
             const btnReprocess = document.createElement("button");
             btnReprocess.innerHTML = '<span class="material-icons">refresh</span> Re-process';
@@ -575,6 +595,34 @@ function renderChapterList() {
                 } catch (err) { console.error("Failed to re-process chapter:", err); }
             });
             dropdown.appendChild(btnReprocess);
+
+            // Re-process TTS only — reuse existing translation, regenerate audio
+            const btnReprocessTts = document.createElement("button");
+            btnReprocessTts.innerHTML = '<span class="material-icons">graphic_eq</span> Re-process TTS';
+            btnReprocessTts.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                dropdown.classList.remove("open");
+                if (!confirm(
+                    `Re-generate audio for chapter ${ch.chapter_number}?\n\n` +
+                    `This skips translation and re-runs only Kokoro using the ` +
+                    `current English text and the latest TTS find/replace rules.`
+                )) return;
+                try {
+                    const res = await fetch(
+                        `${API_BASE}/novels/${currentNovel.id}/chapters/${ch.chapter_number}/reprocess-tts`,
+                        { method: "POST" },
+                    );
+                    if (res.ok) {
+                        await loadNovelJobs(currentNovel.id);
+                        startJobPolling();
+                        await loadChapters(currentNovel.id);
+                    } else {
+                        const err = await res.json().catch(() => ({}));
+                        alert(err.detail || "Failed to re-process TTS");
+                    }
+                } catch (err) { console.error("Failed to re-process TTS:", err); }
+            });
+            dropdown.appendChild(btnReprocessTts);
         }
 
         // Retry (error chapters)
@@ -970,14 +1018,21 @@ function stopQueuePolling() {
 // --- Next-chapter preloading for gapless background playback ---
 
 function getNextReadyChapter(afterChapterNumber) {
-    const nextNum = afterChapterNumber + 1;
-    return chapters.find(
-        (c) => c.chapter_number === nextNum && c.status === "audio_ready",
-    );
+    // Find the lowest-numbered ready chapter strictly after the current one,
+    // so autoplay skips gaps left by deleted chapters (e.g. 3 -> 5 when 4 is gone).
+    // Searches playingChapters (the playlist captured at playback start) so the
+    // user navigating to a different novel mid-playback doesn't redirect autoplay.
+    let best = null;
+    for (const c of playingChapters) {
+        if (c.status !== "audio_ready") continue;
+        if (c.chapter_number <= afterChapterNumber) continue;
+        if (!best || c.chapter_number < best.chapter_number) best = c;
+    }
+    return best;
 }
 
 function preloadNextChapter() {
-    if (!currentNovel || !currentChapter) return;
+    if (!playingNovel || !currentChapter) return;
     const next = getNextReadyChapter(currentChapter.chapter_number);
     if (!next) {
         preloadedAudio = null;
@@ -985,7 +1040,7 @@ function preloadNextChapter() {
     }
     // Already preloaded for this chapter?
     if (preloadedAudio && preloadedAudio.chapterNumber === next.chapter_number) return;
-    const url = `${API_BASE}/novels/${currentNovel.id}/chapters/${next.chapter_number}/audio`;
+    const url = `${API_BASE}/novels/${playingNovel.id}/chapters/${next.chapter_number}/audio`;
     const preAudio = new Audio();
     preAudio.preload = "auto";
     preAudio.src = url;
@@ -1017,6 +1072,16 @@ function releaseWebLock() {
 function loadChapter(chapter) {
     chapterTransition = true; // suppress pause handler side-effects
     currentChapter = chapter;
+    // Snapshot the novel/playlist that owns this chapter, so subsequent
+    // navigation doesn't redirect autoplay/mark-as-read to a different novel.
+    // When auto-advance calls loadChapter, the chapter belongs to playingNovel
+    // (not necessarily currentNovel), so we leave the snapshot alone in that
+    // case and only refresh it when the user starts a chapter from the
+    // currently-viewed novel.
+    if (currentNovel && chapter.novel_id === currentNovel.id) {
+        playingNovel = currentNovel;
+        playingChapters = chapters;
+    }
     const currentSpeed = parseFloat(speedControl.value);
 
     // Update media session metadata first so the notification stays alive
@@ -1027,13 +1092,13 @@ function loadChapter(chapter) {
         audio.src = preloadedAudio.url;
         // The browser should serve this from cache since the preload already fetched it
     } else {
-        audio.src = `${API_BASE}/novels/${currentNovel.id}/chapters/${chapter.chapter_number}/audio`;
+        audio.src = `${API_BASE}/novels/${playingNovel.id}/chapters/${chapter.chapter_number}/audio`;
     }
     audio.load();
     audio.playbackRate = currentSpeed;
     preloadedAudio = null;
 
-    playerNovelTitle.textContent = currentNovel.title;
+    playerNovelTitle.textContent = playingNovel.title;
     playerChapterTitle.textContent = chapter.title_english
         ? chapter.title_english
         : chapter.title && chapter.title !== "Untitled"
@@ -1145,11 +1210,11 @@ audio.addEventListener("timeupdate", () => {
         playerDuration.textContent = formatTime(audio.duration);
         updatePositionState();
         // Mark as listened once past 90%
-        if (currentNovel && currentChapter && audio.currentTime / audio.duration > 0.9) {
-            markChapterListened(currentNovel.id, currentChapter.chapter_number);
+        if (playingNovel && currentChapter && audio.currentTime / audio.duration > 0.9) {
+            markChapterListened(playingNovel.id, currentChapter.chapter_number);
         }
         // Preload next chapter when 80% through current one
-        if (currentNovel && currentChapter && audio.currentTime / audio.duration > 0.8) {
+        if (playingNovel && currentChapter && audio.currentTime / audio.duration > 0.8) {
             preloadNextChapter();
         }
     }
@@ -1158,9 +1223,10 @@ audio.addEventListener("timeupdate", () => {
 // ===================== Auto-Advance =====================
 
 audio.addEventListener("ended", async () => {
-    if (currentNovel && currentChapter) {
-        markChapterListened(currentNovel.id, currentChapter.chapter_number);
-        renderChapterList();
+    if (playingNovel && currentChapter) {
+        markChapterListened(playingNovel.id, currentChapter.chapter_number);
+        // Only re-render the visible chapter list if the playing novel is the one being viewed
+        if (currentNovel && currentNovel.id === playingNovel.id) renderChapterList();
     }
     // Don't await the server save — it may fail/hang when backgrounded.
     // Local save is synchronous and reliable.
@@ -1178,10 +1244,10 @@ audio.addEventListener("ended", async () => {
 // ===================== Media Session API =====================
 
 function updateMediaSession() {
-    if (!("mediaSession" in navigator) || !currentChapter || !currentNovel) return;
+    if (!("mediaSession" in navigator) || !currentChapter || !playingNovel) return;
 
-    const artwork = currentNovel.cover_image_path
-        ? [{ src: `${API_BASE}/novels/${currentNovel.id}/cover`, sizes: "512x512", type: "image/jpeg" }]
+    const artwork = playingNovel.cover_image_path
+        ? [{ src: `${API_BASE}/novels/${playingNovel.id}/cover`, sizes: "512x512", type: "image/jpeg" }]
         : [
             { src: "icons/icon-192.png", sizes: "192x192", type: "image/png" },
             { src: "icons/icon-512.png", sizes: "512x512", type: "image/png" },
@@ -1189,7 +1255,7 @@ function updateMediaSession() {
 
     navigator.mediaSession.metadata = new MediaMetadata({
         title: currentChapter.title_english || currentChapter.title || `Chapter ${currentChapter.chapter_number}`,
-        artist: currentNovel.title,
+        artist: playingNovel.title,
         album: "Light Novel Audiobook",
         artwork,
     });
@@ -1249,23 +1315,23 @@ function updatePositionState() {
 // ===================== Playback Position Sync =====================
 
 function savePlaybackPositionLocal() {
-    if (!currentNovel || !currentChapter) return;
+    if (!playingNovel || !currentChapter) return;
     const state = {
-        novel_id: currentNovel.id,
-        novel_title: currentNovel.title,
+        novel_id: playingNovel.id,
+        novel_title: playingNovel.title,
         chapter_number: currentChapter.chapter_number,
         position_seconds: audio.currentTime,
         playback_speed: audio.playbackRate,
     };
     localStorage.setItem("playback_state", JSON.stringify(state));
-    localStorage.setItem("last_novel_id", String(currentNovel.id));
+    localStorage.setItem("last_novel_id", String(playingNovel.id));
 }
 
 async function savePlaybackPosition() {
-    if (!currentNovel || !currentChapter) return;
+    if (!playingNovel || !currentChapter) return;
     savePlaybackPositionLocal();
     try {
-        await fetch(`${API_BASE}/novels/${currentNovel.id}/playback`, {
+        await fetch(`${API_BASE}/novels/${playingNovel.id}/playback`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -1691,6 +1757,282 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// ===================== Find/Replace Modal =====================
+
+const replacementsModal = document.getElementById("replacements-modal");
+const replacementsTitle = document.getElementById("replacements-title");
+const replacementsHelp = document.getElementById("replacements-help");
+const replacementsTbody = document.getElementById("replacements-tbody");
+const phoneticKeyboard = document.getElementById("phonetic-keyboard");
+const btnAddReplacement = document.getElementById("btn-add-replacement");
+
+// Pinyin tone marks + apostrophe + schwa cover the most common Kokoro
+// mispronunciations the user wants to fix (e.g. "feng shui" -> "fĕng shwā'").
+const PHONETIC_KEYS = [
+    "ā", "á", "ǎ", "à",
+    "ē", "é", "ě", "è",
+    "ī", "í", "ǐ", "ì",
+    "ō", "ó", "ǒ", "ò",
+    "ū", "ú", "ǔ", "ù",
+    "ǖ", "ǘ", "ǚ", "ǜ",
+    "ə", "'",
+];
+
+let activeReplacementKind = null; // "pre" | "post"
+let lastFocusedReplaceInput = null;
+
+function openReplacementsModal(kind) {
+    if (!currentNovel) return;
+    activeReplacementKind = kind;
+    if (kind === "pre") {
+        replacementsTitle.textContent = "Find & Replace — Chinese source";
+        replacementsHelp.textContent =
+            "Substitutions applied to the raw Chinese text before translation. " +
+            "Useful for pinning English placeholders so Qwen passes them through unchanged.";
+    } else {
+        replacementsTitle.textContent = "Find & Replace — English / TTS";
+        replacementsHelp.textContent =
+            "Whole-word, case-insensitive substitutions applied to the English " +
+            "translation before Kokoro generates audio. Use the keyboard icon " +
+            "next to a row to insert phonetic characters.";
+    }
+    phoneticKeyboard.classList.add("hidden");
+    lastFocusedReplaceInput = null;
+    replacementsTbody.innerHTML = '<tr><td colspan="4" style="padding:1rem;text-align:center;color:var(--text-secondary);">Loading…</td></tr>';
+    replacementsModal.classList.remove("hidden");
+    loadReplacements();
+}
+
+function closeReplacementsModal() {
+    replacementsModal.classList.add("hidden");
+    activeReplacementKind = null;
+    // Refresh chapter list so any staleness flags update after edits
+    if (currentNovel) loadChapters(currentNovel.id);
+}
+
+async function loadReplacements() {
+    if (!currentNovel || !activeReplacementKind) return;
+    try {
+        const res = await fetch(
+            `${API_BASE}/novels/${currentNovel.id}/replacements/${activeReplacementKind}`,
+        );
+        if (!res.ok) {
+            replacementsTbody.innerHTML = '<tr><td colspan="4" style="padding:1rem;text-align:center;color:#ff4444;">Failed to load rules</td></tr>';
+            return;
+        }
+        const rows = await res.json();
+        renderReplacementRows(rows);
+    } catch (e) {
+        console.error("Failed to load replacements:", e);
+    }
+}
+
+function renderReplacementRows(rows) {
+    replacementsTbody.innerHTML = "";
+    if (rows.length === 0) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = '<td colspan="4" style="padding:1rem;text-align:center;color:var(--text-secondary);">No rules yet — tap the + button to add one.</td>';
+        replacementsTbody.appendChild(tr);
+        return;
+    }
+    for (const row of rows) {
+        replacementsTbody.appendChild(buildReplacementRow(row));
+    }
+}
+
+function buildReplacementRow(row) {
+    // row may be a saved {id, novel_id, is_global, find_text, replace_text}
+    // or an unsaved draft {id: null, ...}
+    const tr = document.createElement("tr");
+    tr.dataset.id = row.id || "";
+
+    const tdGlobal = document.createElement("td");
+    tdGlobal.className = "col-global";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = !!row.is_global;
+    tdGlobal.appendChild(cb);
+
+    const tdFind = document.createElement("td");
+    tdFind.className = "col-find";
+    const findInput = document.createElement("input");
+    findInput.type = "text";
+    findInput.value = row.find_text || "";
+    findInput.placeholder = activeReplacementKind === "pre" ? "Chinese text" : "English word(s)";
+    tdFind.appendChild(findInput);
+
+    const tdReplace = document.createElement("td");
+    tdReplace.className = "col-replace";
+    const replaceWrap = document.createElement("div");
+    replaceWrap.className = "replace-cell";
+    const replaceInput = document.createElement("input");
+    replaceInput.type = "text";
+    replaceInput.value = row.replace_text || "";
+    replaceInput.placeholder = "Replacement";
+    replaceWrap.appendChild(replaceInput);
+    if (activeReplacementKind === "post") {
+        const kbBtn = document.createElement("button");
+        kbBtn.type = "button";
+        kbBtn.className = "btn-keyboard";
+        kbBtn.title = "Phonetic keyboard";
+        kbBtn.innerHTML = '<span class="material-icons" style="font-size:1.05rem;">keyboard</span>';
+        kbBtn.addEventListener("click", () => {
+            replaceInput.focus();
+            togglePhoneticKeyboard(replaceInput, kbBtn);
+        });
+        replaceWrap.appendChild(kbBtn);
+    }
+    tdReplace.appendChild(replaceWrap);
+
+    const tdActions = document.createElement("td");
+    tdActions.className = "col-actions";
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "btn-row-delete";
+    delBtn.title = "Delete row";
+    delBtn.innerHTML = '<span class="material-icons" style="font-size:1.1rem;">close</span>';
+    delBtn.addEventListener("click", () => deleteReplacementRow(tr));
+    tdActions.appendChild(delBtn);
+
+    tr.appendChild(tdGlobal);
+    tr.appendChild(tdFind);
+    tr.appendChild(tdReplace);
+    tr.appendChild(tdActions);
+
+    // Track focus so the phonetic keyboard inserts into the right field
+    replaceInput.addEventListener("focus", () => { lastFocusedReplaceInput = replaceInput; });
+
+    // Persistence: create on first save (when both fields populated), then
+    // PATCH on subsequent edits. Save on blur and on checkbox change.
+    let saveTimer = null;
+    const scheduleSave = () => {
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => persistReplacementRow(tr, cb, findInput, replaceInput), 400);
+    };
+    findInput.addEventListener("input", scheduleSave);
+    replaceInput.addEventListener("input", scheduleSave);
+    cb.addEventListener("change", () => persistReplacementRow(tr, cb, findInput, replaceInput));
+    findInput.addEventListener("blur", () => persistReplacementRow(tr, cb, findInput, replaceInput));
+    replaceInput.addEventListener("blur", () => persistReplacementRow(tr, cb, findInput, replaceInput));
+
+    return tr;
+}
+
+async function persistReplacementRow(tr, cb, findInput, replaceInput) {
+    const findText = findInput.value;
+    const replaceText = replaceInput.value;
+    const isGlobal = cb.checked;
+    const id = tr.dataset.id;
+
+    if (!findText) return; // Don't save until find is non-empty
+
+    // De-duplicate: if a save is already in flight for this row, skip.
+    if (tr.dataset.saving === "1") return;
+    tr.dataset.saving = "1";
+    try {
+        if (!id) {
+            const res = await fetch(
+                `${API_BASE}/novels/${currentNovel.id}/replacements/${activeReplacementKind}`,
+                {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        find_text: findText,
+                        replace_text: replaceText,
+                        is_global: isGlobal,
+                    }),
+                },
+            );
+            if (res.ok) {
+                const created = await res.json();
+                tr.dataset.id = created.id;
+            }
+        } else {
+            await fetch(`${API_BASE}/replacements/${activeReplacementKind}/${id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    find_text: findText,
+                    replace_text: replaceText,
+                    is_global: isGlobal,
+                }),
+            });
+        }
+    } catch (e) {
+        console.error("Failed to save replacement:", e);
+    } finally {
+        tr.dataset.saving = "";
+    }
+}
+
+async function deleteReplacementRow(tr) {
+    const id = tr.dataset.id;
+    if (id) {
+        try {
+            await fetch(`${API_BASE}/replacements/${activeReplacementKind}/${id}`, {
+                method: "DELETE",
+            });
+        } catch (e) {
+            console.error("Failed to delete replacement:", e);
+            return;
+        }
+    }
+    tr.remove();
+    if (replacementsTbody.children.length === 0) {
+        renderReplacementRows([]);
+    }
+}
+
+function addEmptyReplacementRow() {
+    // Clear placeholder row if present
+    if (replacementsTbody.children.length === 1 && replacementsTbody.firstElementChild.cells.length === 1) {
+        replacementsTbody.innerHTML = "";
+    }
+    const tr = buildReplacementRow({});
+    replacementsTbody.appendChild(tr);
+    tr.querySelector(".col-find input").focus();
+}
+
+function togglePhoneticKeyboard(targetInput, kbBtn) {
+    if (!phoneticKeyboard.classList.contains("hidden") && lastFocusedReplaceInput === targetInput) {
+        phoneticKeyboard.classList.add("hidden");
+        kbBtn.classList.remove("active");
+        return;
+    }
+    if (phoneticKeyboard.children.length === 0) {
+        for (const ch of PHONETIC_KEYS) {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.textContent = ch;
+            b.addEventListener("click", () => insertAtCursor(lastFocusedReplaceInput, ch));
+            phoneticKeyboard.appendChild(b);
+        }
+    }
+    document.querySelectorAll(".btn-keyboard.active").forEach((b) => b.classList.remove("active"));
+    kbBtn.classList.add("active");
+    lastFocusedReplaceInput = targetInput;
+    phoneticKeyboard.classList.remove("hidden");
+}
+
+function insertAtCursor(input, text) {
+    if (!input) return;
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    input.value = input.value.slice(0, start) + text + input.value.slice(end);
+    const newPos = start + text.length;
+    input.setSelectionRange(newPos, newPos);
+    input.focus();
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+document.getElementById("btn-pre-replace").addEventListener("click", () => openReplacementsModal("pre"));
+document.getElementById("btn-post-replace").addEventListener("click", () => openReplacementsModal("post"));
+document.getElementById("btn-close-replacements").addEventListener("click", closeReplacementsModal);
+btnAddReplacement.addEventListener("click", addEmptyReplacementRow);
+replacementsModal.addEventListener("click", (e) => {
+    if (e.target === replacementsModal) closeReplacementsModal();
+});
+
 // ===================== Service Worker Registration =====================
 
 if ("serviceWorker" in navigator) {
@@ -1732,14 +2074,16 @@ async function resumePlaybackForNovel(novelId) {
     if (!chapter) return;
 
     currentChapter = chapter;
+    playingNovel = currentNovel;
+    playingChapters = chapters;
     const currentSpeed = pos.playback_speed || parseFloat(speedControl.value);
-    audio.src = `${API_BASE}/novels/${currentNovel.id}/chapters/${chapter.chapter_number}/audio`;
+    audio.src = `${API_BASE}/novels/${playingNovel.id}/chapters/${chapter.chapter_number}/audio`;
     audio.load();
     audio.playbackRate = currentSpeed;
     speedControl.value = currentSpeed;
     speedDisplay.textContent = `${currentSpeed.toFixed(1)}x`;
 
-    playerNovelTitle.textContent = currentNovel.title;
+    playerNovelTitle.textContent = playingNovel.title;
     playerChapterTitle.textContent = chapter.title_english
         ? chapter.title_english
         : chapter.title && chapter.title !== "Untitled"

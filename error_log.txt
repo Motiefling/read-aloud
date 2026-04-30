@@ -1,0 +1,271 @@
+[2026-04-26T16:39:01] TTS: Utterance 2/40 failed (len=50 chars): Kokoro produced no audio for: '--------------------------------------------------' | text='--------------------------------------------------'
+  novel_id=d5a819cc-f7fc-4f64-a7f7-dea3d2e636e7 chapter_number=8 chapter_id=b3353c7b-882a-4e37-bcd2-f0cc248598a9
+  title=第一第008章 渴望強大（求收
+  english_chars=7683
+  english_snippet=
+    Afternoon will see another update.
+    --------------------------------------------------
+    Ling Zhen Nan stood up abruptly, exuding an intimidating aura ofBreath.. This aura, forged in the crucible of battlefields and infernos, was fully unleashed.
+    In Ling Wuyi's eyes, there flashed a hint of helplessnes
+  traceback:
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 221, in generate_chapter_audio
+        audio = tts_engine.synthesize_to_array(utterance)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 111, in synthesize_to_array
+        raise TTSError(f"Kokoro produced no audio for: {text[:80]!r}")
+    app.pipeline.tts.TTSError: Kokoro produced no audio for: '--------------------------------------------------'
+    
+    The above exception was the direct cause of the following exception:
+    
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tasks.py", line 110, in _translate_and_tts_chapter
+        audio_path = generate_chapter_audio(
+                     ^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 223, in generate_chapter_audio
+        raise TTSError(
+    app.pipeline.tts.TTSError: Utterance 2/40 failed (len=50 chars): Kokoro produced no audio for: '--------------------------------------------------' | text='--------------------------------------------------'
+
+[2026-04-26T17:12:59] TTS: Utterance 22/43 failed (len=6 chars): Kokoro produced no audio for: '******' | text='******'
+  novel_id=d5a819cc-f7fc-4f64-a7f7-dea3d2e636e7 chapter_number=73 chapter_id=3f116ffa-5b60-4388-b077-e7b8e7e82f50
+  title=第一第073章 傷離別
+  english_chars=6761
+  english_snippet=
+    On the grand square's elevated platform at Star Martial Academy.
+    
+    Lin Moding held a magnificent golden-furred tiger with wings on its back, looking fierce and imposing. Ling Xiaoxiao held a white star beast egg in both hands, while Li Feixue wielded a three-yin slaying demon saber that emitted dark 
+  traceback:
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 221, in generate_chapter_audio
+        audio = tts_engine.synthesize_to_array(utterance)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 111, in synthesize_to_array
+        raise TTSError(f"Kokoro produced no audio for: {text[:80]!r}")
+    app.pipeline.tts.TTSError: Kokoro produced no audio for: '******'
+    
+    The above exception was the direct cause of the following exception:
+    
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tasks.py", line 110, in _translate_and_tts_chapter
+        api_client.mark_chapter_error(chapter_id)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 223, in generate_chapter_audio
+        raise TTSError(
+    app.pipeline.tts.TTSError: Utterance 22/43 failed (len=6 chars): Kokoro produced no audio for: '******' | text='******'
+
+[2026-04-26T17:14:10] TTS: Utterance 19/43 failed (len=6 chars): Kokoro produced no audio for: '******' | text='******'
+  novel_id=d5a819cc-f7fc-4f64-a7f7-dea3d2e636e7 chapter_number=74 chapter_id=9ff14de8-c076-4317-80cb-5861fae8de2c
+  title=第一第074章 皇帝有昭
+  english_chars=7388
+  english_snippet=
+    College Road.
+    
+    After sending Ye Tao, Li Kuangfeng, and others back to their dormitory, Ling Xiaoyao gently held onto Ouyang Bingmeng and Ning Xue, walking under the night sky, listening to the sounds of the wind and the call of water.
+    "Snow, Dream, I hope you can understand. For these past ten years
+  traceback:
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 221, in generate_chapter_audio
+        audio = tts_engine.synthesize_to_array(utterance)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 111, in synthesize_to_array
+        raise TTSError(f"Kokoro produced no audio for: {text[:80]!r}")
+    app.pipeline.tts.TTSError: Kokoro produced no audio for: '******'
+    
+    The above exception was the direct cause of the following exception:
+    
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tasks.py", line 110, in _translate_and_tts_chapter
+        api_client.mark_chapter_error(chapter_id)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 223, in generate_chapter_audio
+        raise TTSError(
+    app.pipeline.tts.TTSError: Utterance 19/43 failed (len=6 chars): Kokoro produced no audio for: '******' | text='******'
+
+[2026-04-26T17:16:28] TTS: Utterance 32/33 failed (len=6 chars): Kokoro produced no audio for: '******' | text='******'
+  novel_id=d5a819cc-f7fc-4f64-a7f7-dea3d2e636e7 chapter_number=76 chapter_id=ac751b92-ea5b-47ce-ba4d-2996ed6be6fa
+  title=第一第076章 帝王心術
+  english_chars=6010
+  english_snippet=
+    "Let them come in," Han Zhanmeng swept his cloak and stood up, then sat back in the central chair before speaking loudly.
+    
+    "Yes, Your Majesty!" The chief eunuch replied respectfully.
+    
+    After a brief pause, the chief eunuch shouted again: "The Emperor's edict: summon Prince Jingzhong and Crown Prince 
+  traceback:
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 221, in generate_chapter_audio
+        audio = tts_engine.synthesize_to_array(utterance)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 111, in synthesize_to_array
+        raise TTSError(f"Kokoro produced no audio for: {text[:80]!r}")
+    app.pipeline.tts.TTSError: Kokoro produced no audio for: '******'
+    
+    The above exception was the direct cause of the following exception:
+    
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tasks.py", line 110, in _translate_and_tts_chapter
+        api_client.mark_chapter_error(chapter_id)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 223, in generate_chapter_audio
+        raise TTSError(
+    app.pipeline.tts.TTSError: Utterance 32/33 failed (len=6 chars): Kokoro produced no audio for: '******' | text='******'
+
+[2026-04-26T17:17:30] TTS: Utterance 11/34 failed (len=6 chars): Kokoro produced no audio for: '******' | text='******'
+  novel_id=d5a819cc-f7fc-4f64-a7f7-dea3d2e636e7 chapter_number=77 chapter_id=e891982a-59b8-42b1-8c60-07dc652b0ac0
+  title=第一第077章 天元造化丹
+  english_chars=6114
+  english_snippet=
+    Lin Xiaotian shook his head, his expression somewhat dazed, and sighed, "Xiaoyao, how can we, as subjects, ever guess the thoughts of our emperor? We just need to fulfill our duties."
+    
+    "Grandfather, being loyal is fine, but blind loyalty is not advisable. If the emperor intends to deal with the Lin 
+  traceback:
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 221, in generate_chapter_audio
+        audio = tts_engine.synthesize_to_array(utterance)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 111, in synthesize_to_array
+        raise TTSError(f"Kokoro produced no audio for: {text[:80]!r}")
+    app.pipeline.tts.TTSError: Kokoro produced no audio for: '******'
+    
+    The above exception was the direct cause of the following exception:
+    
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tasks.py", line 110, in _translate_and_tts_chapter
+        api_client.mark_chapter_error(chapter_id)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 223, in generate_chapter_audio
+        raise TTSError(
+    app.pipeline.tts.TTSError: Utterance 11/34 failed (len=6 chars): Kokoro produced no audio for: '******' | text='******'
+
+[2026-04-26T17:19:49] TTS: Utterance 17/43 failed (len=6 chars): Kokoro produced no audio for: '******' | text='******'
+  novel_id=d5a819cc-f7fc-4f64-a7f7-dea3d2e636e7 chapter_number=79 chapter_id=61ca54bc-62a8-4bb4-9e43-a51ac724847c
+  title=第一第079章 忠勇伯（一更）
+  english_chars=7051
+  english_snippet=
+    "Alright, I understand. Tell them we'll be there immediately, and go out and ask him to wait." Ling Xiaotian spoke clearly.
+    
+    "Yes!" Ling Tian replied and quickly headed outside.
+    
+    "Alright, Xiyao, let's go meet the imperial eunuch who brought the edict. Take the edict and it will be effective once yo
+  traceback:
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 221, in generate_chapter_audio
+        audio = tts_engine.synthesize_to_array(utterance)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 111, in synthesize_to_array
+        raise TTSError(f"Kokoro produced no audio for: {text[:80]!r}")
+    app.pipeline.tts.TTSError: Kokoro produced no audio for: '******'
+    
+    The above exception was the direct cause of the following exception:
+    
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tasks.py", line 110, in _translate_and_tts_chapter
+        api_client.mark_chapter_error(chapter_id)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 223, in generate_chapter_audio
+        raise TTSError(
+    app.pipeline.tts.TTSError: Utterance 17/43 failed (len=6 chars): Kokoro produced no audio for: '******' | text='******'
+
+[2026-04-26T17:25:30] TTS: Utterance 8/38 failed (len=6 chars): Kokoro produced no audio for: '******' | text='******'
+  novel_id=d5a819cc-f7fc-4f64-a7f7-dea3d2e636e7 chapter_number=83 chapter_id=3fbde298-c580-4f60-be1f-66b521414585
+  title=第一第083章 風州城
+  chapter_url=None
+  novel_url=None
+  english_chars=7429
+  english_snippet=Standing outside Yongding City, looking at the two indistinct figures on the city walls, Ling Xiaoyao's heart was heavy with sorrow. He hadn't wanted them to come, but here they were, still sending him off. How could he forget this? How could he dare to forget it? Suppressing his sorrow, he mounted 
+  traceback:
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 221, in generate_chapter_audio
+        "TTS chapter #%d: synthesizing %d utterances (%d chars)",
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 111, in synthesize_to_array
+        for result in generator:
+            ^^^^^^^^^^^^^^^^^^^^^
+    app.pipeline.tts.TTSError: Kokoro produced no audio for: '******'
+    
+    The above exception was the direct cause of the following exception:
+    
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tasks.py", line 116, in _translate_and_tts_chapter
+        audio_path = generate_chapter_audio(
+                     ^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tts.py", line 223, in generate_chapter_audio
+        )
+          
+    app.pipeline.tts.TTSError: Utterance 8/38 failed (len=6 chars): Kokoro produced no audio for: '******' | text='******'
+
+[2026-04-26T21:13:40] DISPATCHER: [WinError 183] Cannot create a file when that file already exists: 'N:\\Read-Aloud\\novels\\29831924-a237-4f70-96e6-ab90948f46e1'
+  novel_id=None chapter_number=None chapter_id=None
+  traceback:
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tasks.py", line 281, in dispatcher_loop
+        success = _translate_and_tts_chapter(
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tasks.py", line 69, in _translate_and_tts_chapter
+        write_en(novel_id, chapter_number, english_text)
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\chapter_storage.py", line 35, in write_en
+        p.parent.mkdir(parents=True, exist_ok=True)
+      File "C:\Users\Portia\AppData\Local\Programs\Python\Python311\Lib\pathlib.py", line 1116, in mkdir
+        os.mkdir(self, mode)
+    FileExistsError: [WinError 183] Cannot create a file when that file already exists: 'N:\\Read-Aloud\\novels\\29831924-a237-4f70-96e6-ab90948f46e1'
+
+[2026-04-26T21:14:56] DISPATCHER: [WinError 183] Cannot create a file when that file already exists: 'N:\\Read-Aloud\\novels\\29831924-a237-4f70-96e6-ab90948f46e1'
+  novel_id=None chapter_number=None chapter_id=None
+  traceback:
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tasks.py", line 281, in dispatcher_loop
+        success = _translate_and_tts_chapter(
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tasks.py", line 69, in _translate_and_tts_chapter
+        write_en(novel_id, chapter_number, english_text)
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\chapter_storage.py", line 35, in write_en
+        p.parent.mkdir(parents=True, exist_ok=True)
+      File "C:\Users\Portia\AppData\Local\Programs\Python\Python311\Lib\pathlib.py", line 1116, in mkdir
+        os.mkdir(self, mode)
+    FileExistsError: [WinError 183] Cannot create a file when that file already exists: 'N:\\Read-Aloud\\novels\\29831924-a237-4f70-96e6-ab90948f46e1'
+
+[2026-04-27T21:17:14] DISPATCHER: [WinError 183] Cannot create a file when that file already exists: 'N:\\Read-Aloud\\novels\\55e7f91d-ecf7-4f87-a6d3-e04a43093bb2'
+  novel_id=None chapter_number=None chapter_id=None
+  traceback:
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tasks.py", line 281, in dispatcher_loop
+        success = _translate_and_tts_chapter(
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tasks.py", line 69, in _translate_and_tts_chapter
+        write_en(novel_id, chapter_number, english_text)
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\chapter_storage.py", line 35, in write_en
+        p.parent.mkdir(parents=True, exist_ok=True)
+      File "C:\Users\Portia\AppData\Local\Programs\Python\Python311\Lib\pathlib.py", line 1116, in mkdir
+        os.mkdir(self, mode)
+    FileExistsError: [WinError 183] Cannot create a file when that file already exists: 'N:\\Read-Aloud\\novels\\55e7f91d-ecf7-4f87-a6d3-e04a43093bb2'
+
+[2026-04-27T21:17:57] DISPATCHER: [WinError 183] Cannot create a file when that file already exists: 'N:\\Read-Aloud\\novels\\55e7f91d-ecf7-4f87-a6d3-e04a43093bb2'
+  novel_id=None chapter_number=None chapter_id=None
+  traceback:
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tasks.py", line 281, in dispatcher_loop
+        success = _translate_and_tts_chapter(
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tasks.py", line 69, in _translate_and_tts_chapter
+        write_en(novel_id, chapter_number, english_text)
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\chapter_storage.py", line 35, in write_en
+        p.parent.mkdir(parents=True, exist_ok=True)
+      File "C:\Users\Portia\AppData\Local\Programs\Python\Python311\Lib\pathlib.py", line 1116, in mkdir
+        os.mkdir(self, mode)
+    FileExistsError: [WinError 183] Cannot create a file when that file already exists: 'N:\\Read-Aloud\\novels\\55e7f91d-ecf7-4f87-a6d3-e04a43093bb2'
+
+[2026-04-27T21:19:50] DISPATCHER: [WinError 183] Cannot create a file when that file already exists: 'N:\\Read-Aloud\\novels\\55e7f91d-ecf7-4f87-a6d3-e04a43093bb2'
+  novel_id=None chapter_number=None chapter_id=None
+  traceback:
+    Traceback (most recent call last):
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tasks.py", line 281, in dispatcher_loop
+        success = _translate_and_tts_chapter(
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\tasks.py", line 69, in _translate_and_tts_chapter
+        write_en(novel_id, chapter_number, english_text)
+      File "C:\Users\Portia\Documents\AI\xtts\read-aloud\app\pipeline\chapter_storage.py", line 35, in write_en
+        p.parent.mkdir(parents=True, exist_ok=True)
+      File "C:\Users\Portia\AppData\Local\Programs\Python\Python311\Lib\pathlib.py", line 1116, in mkdir
+        os.mkdir(self, mode)
+    FileExistsError: [WinError 183] Cannot create a file when that file already exists: 'N:\\Read-Aloud\\novels\\55e7f91d-ecf7-4f87-a6d3-e04a43093bb2'
+

@@ -5,8 +5,10 @@ Translates Chinese text to English using a chat-based LLM approach.
 Traditional Chinese is automatically converted to Simplified via OpenCC
 before translation.
 
-Post-processing applies term dictionaries for consistent terminology
-and annotates Chinese names for TTS pronunciation hints.
+User-managed find/replace rules are applied around this pipeline (pre-rules
+on the Chinese before Qwen, post-rules on the English before Kokoro).  See
+``app/utils/replacements.py``.  Any Chinese characters Qwen leaves behind
+get one more pass through Opus-MT as a safety net.
 """
 
 import logging
@@ -110,15 +112,8 @@ class Translator:
                 f"Model not found: '{self.config.model_path}': {e}"
             ) from e
 
-    def _generate(self, user_message: str, auto_fallback: bool = True) -> str:
-        """Run a single chat completion with the system prompt and user message.
-
-        Args:
-            user_message: The Chinese text to translate.
-            auto_fallback: If True, automatically run Opus-MT on any Chinese
-                that leaks through. Set to False when the caller handles
-                fallback separately (e.g. translate_chapter applies term dict first).
-        """
+    def _generate(self, user_message: str) -> str:
+        """Run a single chat completion with the system prompt and user message."""
         import time
 
         messages = [
@@ -155,17 +150,6 @@ class Translator:
             outputs[0][input_len:], skip_special_tokens=True
         ).strip()
 
-        # If Chinese leaked through, patch it with Opus-MT fallback
-        chinese_count = sum(1 for c in result if is_chinese_char(c))
-        if chinese_count > 0:
-            logger.warning(
-                "Translation output contains %d Chinese characters",
-                chinese_count,
-            )
-            if auto_fallback:
-                logger.info("Running Opus-MT fallback from _generate")
-                result = fallback_translate_chinese(result)
-
         return result
 
     def translate_text(self, text: str) -> str:
@@ -183,15 +167,13 @@ class Translator:
         except RuntimeError as e:
             raise TranslationError(f"Translation inference failed: {e}") from e
 
-    def translate_title(self, title: str, term_dict: dict | None = None) -> str:
+    def translate_title(self, title: str) -> str:
         """Translate a chapter title (short text, title-specific prompt)."""
         if not title or not title.strip():
             return title or ""
         logger.info("Translating title: %s", title[:60])
         translated = self._generate_title(title)
         logger.info("Title translated: %s", translated[:60])
-        if term_dict:
-            translated = apply_term_dictionary(translated, term_dict)
         return translated
 
     def _generate_title(self, title: str) -> str:
@@ -201,7 +183,7 @@ class Translator:
         system_prompt = (
             "You are a translator. Translate the given Chinese chapter title "
             "into English. Output ONLY the translated title, nothing else. "
-            "Keep it concise. Preserve names in pinyin (e.g. 林墨 → Lin Mo)."
+            "Keep it concise. Preserve names in pinyin."
         )
         messages = [
             {"role": "system", "content": system_prompt},
@@ -232,9 +214,7 @@ class Translator:
         result = result.split("\n")[0].strip()
         return result
 
-    def translate_chapter(
-        self, chinese_text: str, term_dict: dict | None = None
-    ) -> str:
+    def translate_chapter(self, chinese_text: str) -> str:
         """
         Translate an entire chapter's text.
 
@@ -245,8 +225,11 @@ class Translator:
         Steps:
         1. Convert Traditional -> Simplified Chinese
         2. Translate (single pass or chunked)
-        3. Apply term dictionary post-processing
-        4. Annotate Chinese names for TTS
+        3. Run Opus-MT fallback on any Chinese characters Qwen left behind
+
+        Pre-translation user rules should be applied to ``chinese_text`` by
+        the caller; post-translation user rules are applied later (between
+        this function and TTS).
         """
         if not chinese_text or not chinese_text.strip():
             return ""
@@ -261,35 +244,25 @@ class Translator:
             "single pass" if len(simplified) <= _MAX_CHAPTER_CHARS else "chunked",
         )
 
-        # Disable auto-fallback in _generate so we can apply term dict first
-        has_term_dict = bool(term_dict)
         try:
             if len(simplified) <= _MAX_CHAPTER_CHARS:
-                full_translation = self._generate(simplified, auto_fallback=not has_term_dict)
+                full_translation = self._generate(simplified)
             else:
-                full_translation = self._translate_chunked(simplified, auto_fallback=not has_term_dict)
+                full_translation = self._translate_chunked(simplified)
         except RuntimeError as e:
             raise TranslationError(f"Translation inference failed: {e}") from e
-
-        # Post-processing: term dict first (preferred translations), then
-        # Opus-MT fallback catches any remaining Chinese that the dict missed
-        if term_dict:
-            full_translation = apply_term_dictionary(full_translation, term_dict)
 
         remaining_chinese = sum(1 for c in full_translation if is_chinese_char(c))
         if remaining_chinese > 0:
             logger.info(
-                "Chapter still has %d Chinese chars after term dict — running Opus-MT fallback",
+                "Chapter still has %d Chinese chars after Qwen — running Opus-MT fallback",
                 remaining_chinese,
             )
             full_translation = fallback_translate_chinese(full_translation)
 
-        if term_dict:
-            full_translation = annotate_chinese_names(full_translation, term_dict)
-
         return full_translation
 
-    def _translate_chunked(self, text: str, auto_fallback: bool = True) -> str:
+    def _translate_chunked(self, text: str) -> str:
         """Translate long text by splitting into paragraph-sized chunks.
 
         Paragraphs that exceed ``_MAX_CHAPTER_CHARS`` on their own are
@@ -306,7 +279,7 @@ class Translator:
             if not chunk:
                 return
             logger.info("Translating chunk %d (%d chars)", len(translated_parts) + 1, chunk_len)
-            translated_parts.append(self._generate("\n".join(chunk), auto_fallback=auto_fallback))
+            translated_parts.append(self._generate("\n".join(chunk)))
             chunk = []
             chunk_len = 0
 
@@ -337,34 +310,6 @@ def get_translator() -> Translator:
         translator.load_model()
         _translator_instance = translator
     return _translator_instance
-
-
-# --------------- Post-processing helpers ---------------
-
-
-def apply_term_dictionary(text: str, term_dict: dict) -> str:
-    """
-    Replace inconsistent translations with preferred terms.
-    Operates on the English output — replaces Chinese characters that the model
-    may have left untranslated, using the term dictionary mappings.
-    """
-    if not term_dict:
-        return text
-
-    # Collect all Chinese->English mappings from all categories.
-    # Sort longest-first to avoid partial matches (e.g. "天剑宗" before "天").
-    replacements: list[tuple[str, str]] = []
-    for category in term_dict.values():
-        if isinstance(category, dict):
-            for chinese, english in category.items():
-                replacements.append((chinese, english))
-
-    replacements.sort(key=lambda pair: len(pair[0]), reverse=True)
-
-    for chinese, english in replacements:
-        text = text.replace(chinese, english)
-
-    return text
 
 
 # --------------- Opus-MT fallback ---------------
@@ -420,22 +365,3 @@ def fallback_translate_chinese(text: str) -> str:
         result = result[:start] + translations[zh_text] + result[end:]
 
     return result
-
-
-def annotate_chinese_names(text: str, term_dict: dict) -> str:
-    """
-    Add pronunciation hints for Chinese names so the TTS engine
-    can switch to Chinese phonemes for proper nouns.
-
-    Format: "Lin Mo {{zh:林墨}}"
-    """
-    characters = term_dict.get("characters", {})
-    if not characters:
-        return text
-
-    for chinese, english in characters.items():
-        marker = f"{english} {{{{zh:{chinese}}}}}"
-        if marker not in text:
-            text = text.replace(english, marker)
-
-    return text

@@ -8,7 +8,7 @@ from app.database import init_db
 from app.api.novels import router as novels_router
 from app.api.chapters import router as chapters_router
 from app.api.jobs import router as jobs_router
-from app.api.dictionaries import router as dictionaries_router
+from app.api.replacements import router as replacements_router
 from app.api.settings import router as settings_router
 from app.api.websocket import router as websocket_router
 from app.api.queue import router as queue_router
@@ -96,7 +96,7 @@ app = FastAPI(
 app.include_router(novels_router, prefix="/api/novels", tags=["novels"])
 app.include_router(chapters_router, prefix="/api/novels", tags=["chapters"])
 app.include_router(jobs_router, prefix="/api/jobs", tags=["jobs"])
-app.include_router(dictionaries_router, prefix="/api/dictionaries", tags=["dictionaries"])
+app.include_router(replacements_router, prefix="/api", tags=["replacements"])
 app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 app.include_router(queue_router, prefix="/api/queue", tags=["queue"])
 app.include_router(internal_router, prefix="/internal", tags=["internal"])

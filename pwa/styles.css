@@ -470,6 +470,180 @@ header button {
     color: var(--text-primary);
 }
 
+/* ===================== Find/Replace Modal ===================== */
+.modal-content-wide {
+    max-width: 720px;
+    width: 95%;
+}
+
+.modal-help {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    margin: 0 0 0.75rem 0;
+}
+
+.replacements-table-wrap {
+    position: relative;
+    max-height: 50vh;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.replacements-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.replacements-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-weight: 600;
+    text-align: left;
+    padding: 0.5rem 0.6rem;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.replacements-table .col-global {
+    width: 64px;
+    text-align: center;
+}
+.replacements-table .col-actions {
+    width: 32px;
+}
+
+.replacements-table tbody tr {
+    border-bottom: 1px solid var(--border);
+}
+.replacements-table tbody tr:last-child {
+    border-bottom: none;
+}
+
+.replacements-table td {
+    padding: 0.4rem 0.6rem;
+    vertical-align: middle;
+}
+
+.replacements-table input[type="text"] {
+    width: 100%;
+    padding: 0.4rem 0.5rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.95rem;
+}
+.replacements-table input[type="text"]:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.replacements-table .col-global input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+}
+
+.replacements-table .btn-row-delete {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 0.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.replacements-table .btn-row-delete:hover {
+    color: #ff4444;
+}
+
+.btn-add-row {
+    position: absolute;
+    bottom: 0.4rem;
+    right: 0.4rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    cursor: pointer;
+    padding: 0.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.btn-add-row:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+.replacements-table .btn-keyboard {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 0.25rem;
+    margin-left: 0.25rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.replacements-table .btn-keyboard.active,
+.replacements-table .btn-keyboard:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+.replacements-table .replace-cell {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.phonetic-keyboard {
+    margin-top: 0.75rem;
+    padding: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-card);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+}
+.phonetic-keyboard.hidden {
+    display: none;
+}
+.phonetic-keyboard button {
+    min-width: 2.25rem;
+    padding: 0.4rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 1rem;
+    font-family: serif;
+}
+.phonetic-keyboard button:hover {
+    background: var(--accent);
+    color: white;
+}
+
+/* Stale-rules badge in chapter list */
+.chapter-stale-icon {
+    color: #f0a000;
+    margin-right: 0.4rem;
+    font-size: 1.1rem;
+    vertical-align: middle;
+}
+
 /* ===================== Job Status ===================== */
 #job-status {
     margin-bottom: 1rem;

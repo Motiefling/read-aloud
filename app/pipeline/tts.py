@@ -9,6 +9,8 @@ switching for Chinese names in the future.
 
 import logging
 import re
+import time
+import warnings
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -26,6 +28,11 @@ _ZH_ANNOTATION_RE = re.compile(r"\s*\{\{zh:[^}]+\}\}")
 
 # Sentence-end punctuation for splitting utterances
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+")
+
+# A line is pronounceable only if it contains at least one letter or digit.
+# Lines of pure punctuation/symbols (e.g. "----...----" separators common in
+# Chinese web novels) produce no audio in Kokoro and would otherwise crash.
+_PRONOUNCEABLE_RE = re.compile(r"\w", re.UNICODE)
 
 # Max characters per utterance — keeps Kokoro output quality high
 _MAX_UTTERANCE_LENGTH = 400
@@ -61,8 +68,12 @@ class KokoroTTS(TTSEngine):
         self._pipeline = None
 
     def load_model(self) -> None:
-        # Suppress noisy "words count mismatch" warnings from phonemizer/espeak
-        logging.getLogger("phonemizer").setLevel(logging.ERROR)
+        # Suppress phonemizer/espeak noise. The "words count mismatch" warning
+        # means espeak's punctuation-restoration step couldn't 1:1 align tokens
+        # with the input — harmless, audio still synthesizes correctly.
+        for name in ("phonemizer", "phonemizer.backend", "phonemizer.backend.espeak"):
+            logging.getLogger(name).setLevel(logging.CRITICAL)
+        warnings.filterwarnings("ignore", message=r".*words count mismatch.*")
 
         from kokoro import KPipeline
 
@@ -151,6 +162,10 @@ def split_into_utterances(text: str) -> list[str]:
         if not stripped:
             continue
 
+        if not _PRONOUNCEABLE_RE.search(stripped):
+            logger.debug("Skipping unpronounceable line: %r", stripped[:80])
+            continue
+
         if len(stripped) <= _MAX_UTTERANCE_LENGTH:
             utterances.append(stripped)
         else:
@@ -201,16 +216,34 @@ def generate_chapter_audio(
     pause_samples = int(SAMPLE_RATE * cfg.pause_between_paragraphs_ms / 1000)
     silence = np.zeros(pause_samples, dtype=np.float32)
 
+    total_chars = sum(len(u) for u in utterances)
+    logger.info(
+        "TTS chapter #%d: synthesizing %d utterances (%d chars)",
+        chapter_number, len(utterances), total_chars,
+    )
+
+    synth_start = time.time()
     all_audio = []
+    empty_utterances = 0
     for i, utterance in enumerate(utterances):
-        logger.info(
-            "Synthesizing utterance %d/%d (%d chars)",
-            i + 1, len(utterances), len(utterance),
-        )
-        audio = tts_engine.synthesize_to_array(utterance)
+        try:
+            audio = tts_engine.synthesize_to_array(utterance)
+        except TTSError as exc:
+            empty_utterances += 1
+            logger.warning(
+                "Utterance %d/%d failed, skipping (len=%d): %s | text=%r",
+                i + 1, len(utterances), len(utterance), exc, utterance[:200],
+            )
+            continue
         if len(audio) > 0:
             all_audio.append(audio)
             all_audio.append(silence)
+        else:
+            empty_utterances += 1
+            logger.debug(
+                "Utterance %d/%d produced empty audio: %r",
+                i + 1, len(utterances), utterance[:80],
+            )
 
     if not all_audio:
         raise TTSError("All utterances produced empty audio")
@@ -221,17 +254,30 @@ def generate_chapter_audio(
 
     full_audio = np.concatenate(all_audio)
 
+    # Peak-normalize so the loudest sample sits just under 0 dBFS. Kokoro's
+    # raw output is quiet (peaks well below 1.0); without this, the MP3 plays
+    # noticeably softer than typical audio content.
+    peak = float(np.max(np.abs(full_audio)))
+    if peak > 0:
+        full_audio = full_audio * (0.99 / peak)
+
+    synth_elapsed = time.time() - synth_start
+    audio_duration = len(full_audio) / SAMPLE_RATE
+    success_count = len(utterances) - empty_utterances
+    logger.info(
+        "TTS chapter #%d: synthesized %d/%d utterances in %.1fs (%.1fs audio)",
+        chapter_number, success_count, len(utterances), synth_elapsed, audio_duration,
+    )
+
     # Save as WAV first, then convert to MP3
     chapter_dir = output_dir / novel_id
     chapter_dir.mkdir(parents=True, exist_ok=True)
 
     wav_path = chapter_dir / f"chapter_{chapter_number:04d}.wav"
     sf.write(str(wav_path), full_audio, SAMPLE_RATE)
-    logger.info("Wrote WAV: %s (%.1fs)", wav_path, len(full_audio) / SAMPLE_RATE)
 
     mp3_path = chapter_dir / f"chapter_{chapter_number:04d}.mp3"
     convert_to_mp3(wav_path, mp3_path)
     wav_path.unlink()
 
-    logger.info("Wrote MP3: %s", mp3_path)
     return mp3_path

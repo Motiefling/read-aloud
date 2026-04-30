@@ -9,7 +9,6 @@ class NovelRequest(BaseModel):
     """Request to process a new novel."""
     url: str
     title: str | None = None
-    dictionary_id: str | None = None
     max_chapters: int | None = None  # None = download all
     start_chapter_url: str | None = None  # Override: start scraping from this chapter URL
 
@@ -32,12 +31,6 @@ class PlaybackStateUpdate(BaseModel):
     playback_speed: float = 2.0
 
 
-class TermDictionaryUpdate(BaseModel):
-    """Update a term dictionary."""
-    name: str
-    entries: dict  # {"characters": {...}, "locations": {...}, "terms": {...}}
-
-
 class QueueReorderRequest(BaseModel):
     """Reorder the processing queue."""
     novel_ids: list[str]  # Ordered list of novel IDs (first = highest priority)
@@ -49,7 +42,6 @@ class NovelResponse(BaseModel):
     id: str
     title: str
     source_url: str
-    dictionary_id: str | None = None
     cover_image_path: str | None = None
     total_chapters: int = 0
     processed_chapters: int = 0
@@ -69,6 +61,8 @@ class ChapterResponse(BaseModel):
     status: str = "pending"
     audio_duration_seconds: float | None = None
     audio_file_size_bytes: int | None = None
+    translation_stale: bool = False
+    audio_stale: bool = False
 
 
 class JobResponse(BaseModel):
@@ -101,10 +95,3 @@ class QueueItemResponse(BaseModel):
     scraped_chapters: int = 0
 
 
-class TermDictionaryResponse(BaseModel):
-    id: str
-    novel_id: str | None = None
-    name: str
-    entries: dict
-    created_at: datetime | None = None
-    updated_at: datetime | None = None

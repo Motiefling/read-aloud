@@ -1,12 +1,46 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
+from app.api.replacements import fetch_rules
 from app.config import get_data_dir
 from app.database import get_db
 from app.models import ChapterResponse, PlaybackStateUpdate, PlaybackStateResponse, RenameRequest
 from app.queue_signal import notify_queue_changed
+from app.utils.replacements import hash_rules
 
 router = APIRouter()
+
+
+_CHAPTER_COLS = (
+    "id, novel_id, chapter_number, title, title_english, status, "
+    "audio_duration_seconds, audio_file_size_bytes, "
+    "pre_replacements_hash, post_replacements_hash"
+)
+
+
+def _annotate_staleness(rows, current_pre_hash: str, current_post_hash: str) -> list[dict]:
+    """Add ``translation_stale`` and ``audio_stale`` flags to chapter rows.
+
+    A chapter is stale when its stored hash exists and differs from the
+    current rule-set hash.  Chapters that have never been processed have a
+    NULL stored hash and are not marked stale -- their state is whatever the
+    ``status`` field already says.
+    """
+    out = []
+    for row in rows:
+        d = dict(row)
+        stored_pre = d.get("pre_replacements_hash")
+        stored_post = d.get("post_replacements_hash")
+        d["translation_stale"] = bool(stored_pre) and stored_pre != current_pre_hash
+        d["audio_stale"] = bool(stored_post) and stored_post != current_post_hash
+        out.append(d)
+    return out
+
+
+async def _current_hashes(db, novel_id: str) -> tuple[str, str]:
+    pre_rules = await fetch_rules(db, "pre", novel_id)
+    post_rules = await fetch_rules(db, "post", novel_id)
+    return hash_rules(pre_rules), hash_rules(post_rules)
 
 
 @router.get("/{novel_id}/chapters", response_model=list[ChapterResponse])
@@ -15,13 +49,13 @@ async def list_chapters(novel_id: str):
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, novel_id, chapter_number, title, title_english, status, "
-            "audio_duration_seconds, audio_file_size_bytes "
+            f"SELECT {_CHAPTER_COLS} "
             "FROM chapters WHERE novel_id = ? ORDER BY chapter_number",
             (novel_id,),
         )
         rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+        pre_hash, post_hash = await _current_hashes(db, novel_id)
+        return _annotate_staleness(rows, pre_hash, post_hash)
     finally:
         await db.close()
 
@@ -32,15 +66,15 @@ async def get_chapter(novel_id: str, chapter_num: int):
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, novel_id, chapter_number, title, title_english, status, "
-            "audio_duration_seconds, audio_file_size_bytes "
+            f"SELECT {_CHAPTER_COLS} "
             "FROM chapters WHERE novel_id = ? AND chapter_number = ?",
             (novel_id, chapter_num),
         )
         row = await cursor.fetchone()
         if row is None:
             raise HTTPException(404, "Chapter not found")
-        return dict(row)
+        pre_hash, post_hash = await _current_hashes(db, novel_id)
+        return _annotate_staleness([row], pre_hash, post_hash)[0]
     finally:
         await db.close()
 
@@ -57,7 +91,7 @@ async def rename_chapter(novel_id: str, chapter_num: int, request: RenameRequest
         if await cursor.fetchone() is None:
             raise HTTPException(404, "Chapter not found")
         await db.execute(
-            "UPDATE chapters SET title = ? WHERE novel_id = ? AND chapter_number = ?",
+            "UPDATE chapters SET title_english = ? WHERE novel_id = ? AND chapter_number = ?",
             (request.title, novel_id, chapter_num),
         )
         await db.commit()
@@ -134,6 +168,63 @@ async def retry_chapter(novel_id: str, chapter_num: int):
         )
 
         # Make sure the novel is in the queue so the dispatcher picks this up.
+        cursor = await db.execute(
+            "SELECT queue_position FROM novels WHERE id = ?", (novel_id,),
+        )
+        novel_row = await cursor.fetchone()
+        if novel_row and novel_row["queue_position"] is None:
+            cursor = await db.execute(
+                "SELECT COALESCE(MAX(queue_position), 0) + 1 as next_pos FROM novels"
+            )
+            next_pos = (await cursor.fetchone())["next_pos"]
+            await db.execute(
+                "UPDATE novels SET queue_position = ?, queue_status = 'queued', "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (next_pos, novel_id),
+            )
+
+        await db.commit()
+    finally:
+        await db.close()
+
+    notify_queue_changed()
+    return {"status": "queued"}
+
+
+@router.post("/{novel_id}/chapters/{chapter_num}/reprocess-tts")
+async def reprocess_chapter_tts(novel_id: str, chapter_num: int):
+    """Re-run only the TTS phase for a single chapter.
+
+    Resets the chapter to ``translated`` so the dispatcher picks it up but
+    skips Qwen and reuses the existing English text on disk.  The ``.en.txt``
+    must already exist; otherwise the user has to re-translate from scratch.
+    """
+    from app.pipeline.chapter_storage import has_en
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, status FROM chapters "
+            "WHERE novel_id = ? AND chapter_number = ?",
+            (novel_id, chapter_num),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise HTTPException(404, "Chapter not found")
+        if row["status"] not in ("audio_ready", "translated", "error"):
+            raise HTTPException(400, f"Chapter is {row['status']}, cannot re-TTS")
+        if not has_en(novel_id, chapter_num):
+            raise HTTPException(
+                400,
+                "No English text on disk for this chapter; use the regular "
+                "Re-process to re-translate.",
+            )
+
+        await db.execute(
+            "UPDATE chapters SET status = 'translated' WHERE id = ?",
+            (row["id"],),
+        )
+
         cursor = await db.execute(
             "SELECT queue_position FROM novels WHERE id = ?", (novel_id,),
         )

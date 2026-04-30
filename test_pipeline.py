@@ -17,9 +17,9 @@ import uuid
 
 from app.config import settings, BASE_DIR
 from app.database import DATABASE_PATH, SQL_CREATE_TABLES
+from app.pipeline.chapter_storage import write_zh, write_en
 from app.pipeline.scraper import scrape_novel
 from app.pipeline.translator import get_translator
-from app.utils.term_dictionary import load_dictionary
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,15 +59,16 @@ def main():
     chapters = asyncio.run(scrape_novel(start_url, novel_id, max_chapters=max_chapters))
     logger.info("Scraped %d chapters", len(chapters))
 
-    # Store in DB
+    # Store in DB + on disk
     chapter_ids = []
     for ch in chapters:
         chapter_id = str(uuid.uuid4())
         conn.execute(
-            "INSERT INTO chapters (id, novel_id, chapter_number, title, source_url, chinese_text, status) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'scraped')",
-            (chapter_id, novel_id, ch["chapter_number"], ch["title"], ch["source_url"], ch["chinese_text"]),
+            "INSERT INTO chapters (id, novel_id, chapter_number, title, source_url, status) "
+            "VALUES (?, ?, ?, ?, ?, 'scraped')",
+            (chapter_id, novel_id, ch["chapter_number"], ch["title"], ch["source_url"]),
         )
+        write_zh(novel_id, ch["chapter_number"], ch["chinese_text"])
         chapter_ids.append(chapter_id)
     conn.commit()
 
@@ -80,18 +81,18 @@ def main():
     # --- Step 2: Translate ---
     logger.info("\n=== TRANSLATING ===")
     translator = get_translator()
-    term_dict = load_dictionary(novel_id)
 
     for i, (chapter_id, ch) in enumerate(zip(chapter_ids, chapters), 1):
         logger.info(
             "Translating chapter %d/%d (#%d: %s)...",
             i, len(chapters), ch["chapter_number"], ch["title"],
         )
-        english_text = translator.translate_chapter(ch["chinese_text"], term_dict)
+        english_text = translator.translate_chapter(ch["chinese_text"])
 
+        write_en(novel_id, ch["chapter_number"], english_text)
         conn.execute(
-            "UPDATE chapters SET english_text = ?, status = 'translated' WHERE id = ?",
-            (english_text, chapter_id),
+            "UPDATE chapters SET status = 'translated' WHERE id = ?",
+            (chapter_id,),
         )
         conn.commit()
 

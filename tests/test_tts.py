@@ -59,6 +59,16 @@ class TestSplitIntoUtterances:
         assert split_into_utterances("") == []
         assert split_into_utterances("\n\n\n") == []
 
+    def test_skips_unpronounceable_lines(self):
+        from app.pipeline.tts import split_into_utterances
+        text = (
+            "Author's note follows.\n"
+            "--------------------------------------------------\n"
+            "Real chapter content."
+        )
+        result = split_into_utterances(text)
+        assert result == ["Author's note follows.", "Real chapter content."]
+
 
 class TestKokoroTTS:
     """Tests for the Kokoro TTS engine (mocked)."""

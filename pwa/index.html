@@ -46,6 +46,8 @@
                 <div style="display: flex; gap: 0.5rem;">
                     <button id="btn-hide-read" class="btn-toggle-read" aria-label="Hide read chapters" title="Hide read chapters"><span class="material-icons">visibility</span></button>
                     <button id="btn-sort-chapters" class="btn-sort" aria-label="Sort chapters" title="Sort chapters"><span class="material-icons">swap_vert</span></button>
+                    <button id="btn-pre-replace" aria-label="Chinese find and replace" title="Find &amp; replace (Chinese source)"><span class="material-icons">find_replace</span></button>
+                    <button id="btn-post-replace" aria-label="English find and replace" title="Find &amp; replace (English / TTS)"><span class="material-icons">menu_book</span></button>
                     <button id="btn-rename-novel" aria-label="Rename novel" title="Rename novel"><span class="material-icons">edit</span></button>
                     <button id="btn-add-chapters" aria-label="Download more chapters" title="Download more chapters"><span class="material-icons">add</span></button>
                     <button id="btn-check-updates" aria-label="Check for new chapters" title="Check for new chapters"><span class="material-icons">refresh</span></button>
@@ -126,6 +128,36 @@
                     <button type="submit">Download</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Find/Replace Modal (shared by pre + post) -->
+    <div id="replacements-modal" class="modal hidden">
+        <div class="modal-content modal-content-wide">
+            <h2 id="replacements-title">Find &amp; Replace</h2>
+            <p id="replacements-help" class="modal-help"></p>
+            <div class="replacements-table-wrap">
+                <table class="replacements-table">
+                    <thead>
+                        <tr>
+                            <th class="col-global" title="Apply to every novel">Global</th>
+                            <th class="col-find">Find</th>
+                            <th class="col-replace">Replace with</th>
+                            <th class="col-actions"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="replacements-tbody">
+                        <!-- Rows rendered by app.js -->
+                    </tbody>
+                </table>
+                <button type="button" id="btn-add-replacement" class="btn-add-row" aria-label="Add row" title="Add row"><span class="material-icons">add_box</span></button>
+            </div>
+            <div id="phonetic-keyboard" class="phonetic-keyboard hidden">
+                <!-- Buttons rendered by app.js -->
+            </div>
+            <div class="modal-actions">
+                <button type="button" id="btn-close-replacements">Close</button>
+            </div>
         </div>
     </div>
 

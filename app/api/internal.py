@@ -52,12 +52,14 @@ class NovelTitleUpdate(BaseModel):
 
 class ChapterTranslatedUpdate(BaseModel):
     title_english: str | None = None
+    pre_replacements_hash: str | None = None
 
 
 class ChapterAudioReadyUpdate(BaseModel):
     audio_path: str
     duration_seconds: float
     file_size_bytes: int
+    post_replacements_hash: str | None = None
 
 
 class JobUpdate(BaseModel):
@@ -80,12 +82,12 @@ async def get_next_work() -> dict[str, Any] | None:
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT c.id, c.novel_id, c.chapter_number, c.title "
+            "SELECT c.id, c.novel_id, c.chapter_number, c.title, c.status, c.source_url "
             "FROM chapters c "
             "JOIN novels n ON c.novel_id = n.id "
             "WHERE n.queue_position IS NOT NULL "
             "  AND n.queue_status IN ('queued', 'active') "
-            "  AND c.status = 'scraped' "
+            "  AND c.status IN ('scraped', 'translated') "
             "ORDER BY n.queue_position ASC, c.chapter_number ASC "
             "LIMIT 1"
         )
@@ -130,10 +132,11 @@ async def get_next_work() -> dict[str, Any] | None:
         ready = (await cursor.fetchone())["cnt"]
 
         cursor = await db.execute(
-            "SELECT title FROM novels WHERE id = ?", (novel_id,),
+            "SELECT title, source_url FROM novels WHERE id = ?", (novel_id,),
         )
         novel_row = await cursor.fetchone()
         novel_title = novel_row["title"] if novel_row else None
+        novel_source_url = novel_row["source_url"] if novel_row else None
 
         await db.commit()
 
@@ -143,8 +146,14 @@ async def get_next_work() -> dict[str, Any] | None:
                 "novel_id": novel_id,
                 "chapter_number": chapter_row["chapter_number"],
                 "title": chapter_row["title"],
+                "source_url": chapter_row["source_url"],
+                "status": chapter_row["status"],
             },
-            "novel": {"id": novel_id, "title": novel_title},
+            "novel": {
+                "id": novel_id,
+                "title": novel_title,
+                "source_url": novel_source_url,
+            },
             "job_id": job_id,
             "progress": {"ready": ready, "total": total},
         }
@@ -175,8 +184,10 @@ async def mark_chapter_translated(chapter_id: str, update: ChapterTranslatedUpda
     db = await get_db()
     try:
         cursor = await db.execute(
-            "UPDATE chapters SET title_english = ?, status = 'translated' WHERE id = ?",
-            (update.title_english, chapter_id),
+            "UPDATE chapters SET title_english = ?, "
+            "pre_replacements_hash = COALESCE(?, pre_replacements_hash), "
+            "status = 'translated' WHERE id = ?",
+            (update.title_english, update.pre_replacements_hash, chapter_id),
         )
         if cursor.rowcount == 0:
             raise HTTPException(404, "Chapter not found")
@@ -193,9 +204,11 @@ async def mark_chapter_audio_ready(chapter_id: str, update: ChapterAudioReadyUpd
     try:
         cursor = await db.execute(
             "UPDATE chapters SET audio_path = ?, audio_duration_seconds = ?, "
-            "audio_file_size_bytes = ?, status = 'audio_ready' WHERE id = ?",
+            "audio_file_size_bytes = ?, "
+            "post_replacements_hash = COALESCE(?, post_replacements_hash), "
+            "status = 'audio_ready' WHERE id = ?",
             (update.audio_path, update.duration_seconds, update.file_size_bytes,
-             chapter_id),
+             update.post_replacements_hash, chapter_id),
         )
         if cursor.rowcount == 0:
             raise HTTPException(404, "Chapter not found")
@@ -219,7 +232,7 @@ async def mark_chapter_audio_ready(chapter_id: str, update: ChapterAudioReadyUpd
 
         cursor = await db.execute(
             "SELECT COUNT(*) as cnt FROM chapters "
-            "WHERE novel_id = ? AND status = 'scraped'",
+            "WHERE novel_id = ? AND status IN ('scraped', 'translated')",
             (novel_id,),
         )
         remaining = (await cursor.fetchone())["cnt"]
@@ -297,5 +310,77 @@ async def update_job(job_id: str, update: JobUpdate):
 async def wake_queue():
     """Wake the dispatcher. Currently unused — dispatcher subscribes to Redis directly —
     but exposed so the worker could poke itself via HTTP if needed."""
+    notify_queue_changed()
+    return {"status": "ok"}
+
+
+@router.get("/novels/{novel_id}/replacements/{kind}")
+async def worker_get_replacements(novel_id: str, kind: str):
+    """Worker-side fetch of replacement rules for a novel.
+
+    Returns the rule list (novel-scoped + global) plus a precomputed hash so
+    the worker can stamp the chapter row consistently with what was applied.
+    """
+    from app.api.replacements import fetch_rules
+    from app.utils.replacements import hash_rules
+
+    if kind not in ("pre", "post"):
+        raise HTTPException(404, f"Unknown replacement kind '{kind}'")
+
+    db = await get_db()
+    try:
+        rules = await fetch_rules(db, kind, novel_id)  # type: ignore[arg-type]
+    finally:
+        await db.close()
+    return {
+        "rules": [{"find_text": f, "replace_text": r} for f, r in rules],
+        "hash": hash_rules(rules),
+    }
+
+
+@router.post("/chapters/{chapter_id}/reset-for-tts")
+async def reset_chapter_for_tts(chapter_id: str):
+    """Move an audio_ready chapter back to ``translated`` so the dispatcher
+    re-runs only the TTS phase.  Also ensures the novel is queued so the
+    dispatcher actually picks it up."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT novel_id, status FROM chapters WHERE id = ?",
+            (chapter_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise HTTPException(404, "Chapter not found")
+        if row["status"] not in ("audio_ready", "translated", "error"):
+            raise HTTPException(
+                400,
+                f"Chapter is {row['status']}, can only re-TTS translated/audio_ready/error",
+            )
+
+        await db.execute(
+            "UPDATE chapters SET status = 'translated' WHERE id = ?",
+            (chapter_id,),
+        )
+
+        novel_id = row["novel_id"]
+        cursor = await db.execute(
+            "SELECT queue_position FROM novels WHERE id = ?", (novel_id,),
+        )
+        novel_row = await cursor.fetchone()
+        if novel_row and novel_row["queue_position"] is None:
+            cursor = await db.execute(
+                "SELECT COALESCE(MAX(queue_position), 0) + 1 as next_pos FROM novels"
+            )
+            next_pos = (await cursor.fetchone())["next_pos"]
+            await db.execute(
+                "UPDATE novels SET queue_position = ?, queue_status = 'queued', "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (next_pos, novel_id),
+            )
+
+        await db.commit()
+    finally:
+        await db.close()
     notify_queue_changed()
     return {"status": "ok"}
