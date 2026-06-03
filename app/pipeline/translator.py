@@ -33,6 +33,26 @@ _SENTENCE_ENDINGS = re.compile(r'(?<=[。！？；…」』])')
 # Opus-MT model for fallback translation of Chinese that Qwen misses
 _OPUS_MT_MODEL_NAME = "Helsinki-NLP/opus-mt-zh-en"
 
+# Pinyin tone-mark vowels.  If Qwen output is dense with these it has slipped
+# into "romanize the chapter" mode instead of translating — see
+# ``_is_pinyin_output``.
+_PINYIN_DIACRITICS = "āēīōūǖáéíóúǘǎěǐǒǔǚàèìòùǜ"
+_PINYIN_DIACRITIC_RE = re.compile(f"[{_PINYIN_DIACRITICS}]")
+_PINYIN_DENSITY_THRESHOLD = 0.01  # >1% diacritics ⇒ treat as pinyin
+
+
+def _pinyin_density(text: str) -> float:
+    """Fraction of characters in ``text`` that are pinyin tone-mark vowels.
+
+    Used to detect when Qwen has slipped into "romanize the chapter" mode
+    instead of translating.  Real English narrative occasionally carries a
+    diacritic (a romanized name, a borrowed word), so callers flag only when
+    density crosses ``_PINYIN_DENSITY_THRESHOLD`` (~1%).
+    """
+    if not text:
+        return 0.0
+    return len(_PINYIN_DIACRITIC_RE.findall(text)) / len(text)
+
 
 def _split_long_paragraph(text: str, max_chars: int) -> list[str]:
     """Split a long paragraph into pieces on Chinese sentence boundaries.
@@ -112,9 +132,11 @@ class Translator:
                 f"Model not found: '{self.config.model_path}': {e}"
             ) from e
 
-    def _generate(self, user_message: str) -> str:
+    def _generate(self, user_message: str, *, temperature: float | None = None) -> str:
         """Run a single chat completion with the system prompt and user message."""
         import time
+
+        temp: float = self.config.temperature if temperature is None else temperature
 
         messages = [
             {"role": "system", "content": self.config.system_prompt},
@@ -133,9 +155,11 @@ class Translator:
             outputs = self._model.generate(
                 **inputs,
                 max_new_tokens=self.config.max_new_tokens,
-                temperature=self.config.temperature,
-                do_sample=self.config.temperature > 0,
+                temperature=temp,
+                do_sample=temp > 0,
                 top_p=0.9,
+                repetition_penalty=1.15,
+                no_repeat_ngram_size=6,
             )
 
         output_tokens = outputs[0].shape[0] - input_len
@@ -247,6 +271,35 @@ class Translator:
         try:
             if len(simplified) <= _MAX_CHAPTER_CHARS:
                 full_translation = self._generate(simplified)
+                density = _pinyin_density(full_translation)
+                if density > _PINYIN_DENSITY_THRESHOLD:
+                    logger.warning(
+                        "PINYIN DETECTED: %.2f%% diacritic density in Qwen "
+                        "output (threshold %.2f%%, len=%d). Retrying at "
+                        "temperature=0.9. Snippet: %r",
+                        density * 100,
+                        _PINYIN_DENSITY_THRESHOLD * 100,
+                        len(full_translation),
+                        full_translation[:200],
+                    )
+                    full_translation = self._generate(simplified, temperature=0.9)
+                    retry_density = _pinyin_density(full_translation)
+                    if retry_density > _PINYIN_DENSITY_THRESHOLD:
+                        logger.error(
+                            "PINYIN RETRY FAILED: %.2f%% diacritic density on "
+                            "second attempt. Snippet: %r",
+                            retry_density * 100,
+                            full_translation[:200],
+                        )
+                        raise TranslationError(
+                            f"Qwen produced pinyin instead of English on both "
+                            f"attempts (densities {density:.1%} then "
+                            f"{retry_density:.1%}); chapter cannot be translated."
+                        )
+                    logger.info(
+                        "PINYIN RETRY OK: density dropped to %.2f%%",
+                        retry_density * 100,
+                    )
             else:
                 full_translation = self._translate_chunked(simplified)
         except RuntimeError as e:
@@ -278,8 +331,42 @@ class Translator:
             nonlocal chunk, chunk_len
             if not chunk:
                 return
-            logger.info("Translating chunk %d (%d chars)", len(translated_parts) + 1, chunk_len)
-            translated_parts.append(self._generate("\n".join(chunk)))
+            chunk_text = "\n".join(chunk)
+            chunk_idx = len(translated_parts) + 1
+            logger.info("Translating chunk %d (%d chars)", chunk_idx, chunk_len)
+            translated = self._generate(chunk_text)
+            density = _pinyin_density(translated)
+            if density > _PINYIN_DENSITY_THRESHOLD:
+                logger.warning(
+                    "PINYIN DETECTED on chunk %d: %.2f%% diacritic density "
+                    "(threshold %.2f%%, len=%d). Retrying at temperature=0.9. "
+                    "Snippet: %r",
+                    chunk_idx,
+                    density * 100,
+                    _PINYIN_DENSITY_THRESHOLD * 100,
+                    len(translated),
+                    translated[:200],
+                )
+                translated = self._generate(chunk_text, temperature=0.9)
+                retry_density = _pinyin_density(translated)
+                if retry_density > _PINYIN_DENSITY_THRESHOLD:
+                    logger.error(
+                        "PINYIN RETRY FAILED on chunk %d: %.2f%% diacritic "
+                        "density on second attempt. Snippet: %r",
+                        chunk_idx,
+                        retry_density * 100,
+                        translated[:200],
+                    )
+                    raise TranslationError(
+                        f"Qwen produced pinyin instead of English on chunk "
+                        f"{chunk_idx} on both attempts (densities "
+                        f"{density:.1%} then {retry_density:.1%})."
+                    )
+                logger.info(
+                    "PINYIN RETRY OK on chunk %d: density dropped to %.2f%%",
+                    chunk_idx, retry_density * 100,
+                )
+            translated_parts.append(translated)
             chunk = []
             chunk_len = 0
 
